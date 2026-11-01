@@ -35,6 +35,9 @@ class Settings:
     """Run the job poller thread (generation.Poller). Tests switch it off and poll on demand."""
     max_pending_per_user: int = 16
     static_dir: str | None = None
+    dev_sd_server: str | None = None
+    """Development only: a local sd-server URL that stands in for gpu-scheduler (scheduler.LocalSdServer). Ignored
+    when public_url is https."""
     dev_login: bool = False
     """Local-only sign-in without authentik, for development and UI tests. Refused when public_url is https."""
 
@@ -73,5 +76,6 @@ class Settings:
             background_poll=(env.get("BACKGROUND_POLL") or "1") != "0",
             max_pending_per_user=int(env.get("MAX_PENDING_PER_USER") or cls.max_pending_per_user),
             static_dir=env.get("STATIC_DIR") or None,
+            dev_sd_server=env.get("DEV_SD_SERVER") or None,
             dev_login=(env.get("DEV_LOGIN") or "") == "1",
         )

@@ -90,6 +90,6 @@ def test_private_artifacts_stay_private_public_ones_are_shared(world, alice, bob
 def test_listing_pages_newest_first(alice):
     ids = [gen(alice).json()["artifacts"][0]["id"] for _ in range(3)]
     page = alice.get("/api/artifacts?limit=2").json()
-    assert [a["id"] for a in page["artifacts"]] == ids[:0:-1] and page["next"]
-    rest = alice.get(f"/api/artifacts?limit=2&before={page['next']}").json()
+    assert [a["id"] for a in page["artifacts"]] == ids[:0:-1] and page["next"].endswith("+00:00")
+    rest = alice.get("/api/artifacts", params={"limit": 2, "before": page["next"]}).json()
     assert [a["id"] for a in rest["artifacts"]] == ids[:1] and rest["next"] is None

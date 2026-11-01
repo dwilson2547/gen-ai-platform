@@ -17,21 +17,21 @@ def can_view(p: Project, user: User) -> bool:
 def project_for_view(s: Session, project_id: str, user: User) -> Project:
     p = s.get(Project, project_id)
     if p is None or not can_view(p, user):
-        raise HTTPException(404, "no such project")        # a private project's existence isn't disclosed
+        raise HTTPException(404, "No such project")        # a private project's existence isn't disclosed
     return p
 
 
 def project_for_write(s: Session, project_id: str, user: User) -> Project:
     p = project_for_view(s, project_id, user)
     if p.owner_id != user.id:
-        raise HTTPException(403, "only the project's owner can add to it")
+        raise HTTPException(403, "Only the project's owner can add to it")
     return p
 
 
 def artifact_for_view(s: Session, artifact_id: str, user: User) -> Artifact:
     a = s.get(Artifact, artifact_id)
     if a is None or not can_view(a.project, user):
-        raise HTTPException(404, "no such artifact")
+        raise HTTPException(404, "No such artifact")
     return a
 
 

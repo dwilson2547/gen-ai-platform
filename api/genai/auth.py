@@ -106,8 +106,8 @@ def user_for_request(s: Session, request: Request, settings: Settings) -> User |
 
 def require_user(s: Session, request: Request, settings: Settings) -> User:
     if request.method not in SAFE_METHODS and request.headers.get(CSRF_HEADER) != "1":
-        raise HTTPException(403, "missing X-Genai header")
+        raise HTTPException(403, "Missing X-Genai header")
     user = user_for_request(s, request, settings)
     if user is None:
-        raise HTTPException(401, "not signed in")
+        raise HTTPException(401, "Not signed in")
     return user

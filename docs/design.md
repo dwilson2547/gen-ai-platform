@@ -149,7 +149,9 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
    - 2a ✅ backend (2026-11-01): `api/genai/` — authentik OIDC gated on `USER_GROUP`, sessions, projects, generate
      (one gpu-scheduler job per image, presigned PUT into the bucket), a poller folding job results into artifacts,
      an auth-checked image proxy; 17 tests. Schema by `create_all` until there's prod data to keep.
-   - 2b UI (React/Vite, webdoc's stack): splash, prompt + grid, projects, artifact page.
+   - 2b ✅ UI (2026-11-01, `ui/`, React/Vite as webdoc): splash, prompt bar over a live grid, projects, project
+     page, image page; six workflows verified in a browser against a local sd-server (`.ui_dev_state.md`). Dev-only
+     `DEV_SD_SERVER` runs jobs on a local sd-server instead of gpu-scheduler.
    - 2c deploy: image, chart, CI, authentik provider + group, bucket, DB, gpu-scheduler client token.
 3. MCP server with OAuth.
 4. Tweaks and lineage; `sprite` preset and post-processing variants.

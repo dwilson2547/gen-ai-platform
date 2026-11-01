@@ -6,7 +6,7 @@ import contextlib
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
@@ -18,7 +18,7 @@ from . import __version__, access, auth, catalogue, generation, oidc, storage
 from .config import Settings
 from .db import Database
 from .models import Artifact, Project, User
-from .scheduler import HttpScheduler, Scheduler, Unconfigured
+from .scheduler import HttpScheduler, LocalSdServer, Scheduler, Unconfigured
 
 log = logging.getLogger("genai")
 
@@ -68,10 +68,18 @@ class GenerateIn(BaseModel):
     steps: int | None = Field(default=None, ge=1, le=50)
 
 
+def iso(dt: datetime | None) -> str | None:
+    """UTC ISO-8601 with an offset. SQLite hands back naive datetimes (stored as UTC); without the offset a browser
+    reads them as local time."""
+    if dt is None:
+        return None
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+
+
 def project_out(p: Project, user: User, count: int = 0, cover: str | None = None) -> dict:
     return {"id": p.id, "name": p.name, "description": p.description, "visibility": p.visibility,
             "is_default": p.is_default, "owner": p.owner.username, "mine": p.owner_id == user.id,
-            "created_at": p.created_at.isoformat(), "artifacts": count,
+            "created_at": iso(p.created_at), "artifacts": count,
             "cover_url": f"/api/artifacts/{cover}/image" if cover else None}
 
 
@@ -79,13 +87,13 @@ def artifact_out(a: Artifact) -> dict:
     m = catalogue.MODELS.get(a.model)
     return {
         "id": a.id, "project": {"id": a.project.id, "name": a.project.name, "visibility": a.project.visibility},
-        "by": a.creator.username, "created_at": a.created_at.isoformat(),
+        "by": a.creator.username, "created_at": iso(a.created_at),
         "prompt": a.prompt, "full_prompt": a.full_prompt, "preset": a.preset,
         "model": a.model, "model_label": m.label if m else a.model, "commercial": m.commercial if m else None,
         "seed": a.seed, "width": a.width, "height": a.height, "steps": a.steps, "cfg_scale": a.cfg_scale,
         "parent_id": a.parent_id, "op": a.op, "status": a.status, "error": a.error,
         "ran_model": a.ran_model, "worker": a.worker, "seconds": a.seconds, "bytes": a.bytes,
-        "finished_at": a.finished_at.isoformat() if a.finished_at else None,
+        "finished_at": iso(a.finished_at),
         "image_url": f"/api/artifacts/{a.id}/image" if a.status == "done" else None,
     }
 
@@ -102,8 +110,12 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         log.warning("DEV_LOGIN ignored: PUBLIC_URL is https")
     store = store if store is not None else storage.from_settings(settings)
     if scheduler is None:
-        scheduler = (HttpScheduler(settings.scheduler_url, settings.scheduler_token) if settings.scheduler_url
-                     else Unconfigured())
+        if settings.scheduler_url:
+            scheduler = HttpScheduler(settings.scheduler_url, settings.scheduler_token)
+        elif settings.dev_sd_server and not settings.secure:
+            scheduler = LocalSdServer(settings.dev_sd_server)
+        else:
+            scheduler = Unconfigured()
     poller = generation.Poller(db, scheduler, store, settings.poll_seconds)
 
     @contextlib.asynccontextmanager
@@ -165,19 +177,19 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     @app.post("/api/auth/logout")
     def logout(request: Request, response: Response, s: Session = Depends(session)):
         if request.headers.get(auth.CSRF_HEADER) != "1":
-            raise HTTPException(403, "missing X-Genai header")
+            raise HTTPException(403, "Missing X-Genai header")
         auth.end_session(s, request, settings, response)
         return {"ok": True}
 
     @app.get(oidc.FLOW_PATH + "/login")
     def oidc_login():
         if provider is None:
-            raise HTTPException(404, "sign-in is not set up on this server")
+            raise HTTPException(404, "Sign-in is not set up on this server")
         try:
             url, flow = oidc.begin(provider, settings)
         except Exception as exc:  # noqa: BLE001
             log.warning("oidc: discovery failed: %s", exc)
-            raise HTTPException(502, "cannot reach the sign-in server") from None
+            raise HTTPException(502, "Cannot reach the sign-in server") from None
         res = RedirectResponse(url, status_code=302)
         res.set_cookie(oidc.FLOW_COOKIE, flow, max_age=oidc.FLOW_TTL_S, path=oidc.FLOW_PATH,
                        httponly=True, secure=settings.secure, samesite="lax")
@@ -187,7 +199,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     def oidc_callback(request: Request, code: str = "", state: str = "", error: str = "",
                       s: Session = Depends(session)):
         if provider is None:
-            raise HTTPException(404, "sign-in is not set up on this server")
+            raise HTTPException(404, "Sign-in is not set up on this server")
         res = RedirectResponse("/", status_code=302)
         res.delete_cookie(oidc.FLOW_COOKIE, path=oidc.FLOW_PATH)
         if error:
@@ -207,7 +219,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         @app.post("/api/auth/dev-login")
         def dev_login(body: DevLoginIn, request: Request, response: Response, s: Session = Depends(session)):
             if request.headers.get(auth.CSRF_HEADER) != "1":
-                raise HTTPException(403, "missing X-Genai header")
+                raise HTTPException(403, "Missing X-Genai header")
             name = auth.USERNAME_RE.sub("", body.name.lower())[:60] or "dev"
             user = s.scalar(select(User).where(User.username == name)) or auth.create_user(s, name)
             auth.start_session(s, user, settings, response)
@@ -239,7 +251,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     def create_project(body: ProjectIn, user: User = Depends(user_dep), s: Session = Depends(session)):
         name = body.name.strip()
         if s.scalar(select(Project.id).where(Project.owner_id == user.id, Project.name == name)):
-            raise HTTPException(409, "you already have a project with that name")
+            raise HTTPException(409, "You already have a project with that name")
         p = Project(owner_id=user.id, name=name, description=body.description.strip(), visibility=body.visibility)
         s.add(p)
         s.flush()
@@ -257,7 +269,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         p = access.project_for_write(s, project_id, user)
         if body.name is not None and body.name.strip() != p.name:
             if s.scalar(select(Project.id).where(Project.owner_id == user.id, Project.name == body.name.strip())):
-                raise HTTPException(409, "you already have a project with that name")
+                raise HTTPException(409, "You already have a project with that name")
             p.name = body.name.strip()
         if body.description is not None:
             p.description = body.description.strip()
@@ -293,12 +305,15 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
             q = q.where(Artifact.created_by == user.id)
         if before:
             try:
-                q = q.where(Artifact.created_at < datetime.fromisoformat(before))
+                cursor = datetime.fromisoformat(before)
             except ValueError:
-                raise HTTPException(422, "before must be an ISO timestamp") from None
+                raise HTTPException(422, "The before cursor must be an ISO timestamp") from None
+            if cursor.tzinfo is not None and db.engine.dialect.name == "sqlite":
+                cursor = cursor.astimezone(timezone.utc).replace(tzinfo=None)   # SQLite stores naive UTC
+            q = q.where(Artifact.created_at < cursor)
         rows = list(s.scalars(q.order_by(Artifact.created_at.desc()).limit(max(1, min(limit, 100)))))
         return {"artifacts": [artifact_out(a) for a in rows],
-                "next": rows[-1].created_at.isoformat() if len(rows) == max(1, min(limit, 100)) else None}
+                "next": iso(rows[-1].created_at) if len(rows) == max(1, min(limit, 100)) else None}
 
     @app.get("/api/artifacts/{artifact_id}")
     def get_artifact(artifact_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
@@ -308,7 +323,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     def delete_artifact(artifact_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
         a = access.artifact_for_view(s, artifact_id, user)
         if a.project.owner_id != user.id:
-            raise HTTPException(403, "only the project's owner can delete from it")
+            raise HTTPException(403, "Only the project's owner can delete from it")
         if a.image_key:
             try:
                 store.delete(a.image_key)
@@ -322,11 +337,11 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
                        s: Session = Depends(session)):
         a = access.artifact_for_view(s, artifact_id, user)
         if a.status != "done" or not a.image_key:
-            raise HTTPException(404, "no image yet")
+            raise HTTPException(404, "No image yet")
         try:
             body = store.get(a.image_key)
         except KeyError:
-            raise HTTPException(404, "the image is missing from storage") from None
+            raise HTTPException(404, "The image is missing from storage") from None
         headers = {"Cache-Control": "private, max-age=86400, immutable"}      # an artifact's image never changes
         if download:
             slug = re.sub(r"[^a-z0-9]+", "-", a.prompt.lower())[:40].strip("-") or "image"
@@ -335,7 +350,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
     def api_not_found(rest: str):
-        raise HTTPException(404, "not found")
+        raise HTTPException(404, "Not found")
 
     # --- the built UI -----------------------------------------------------------------------------------------
 

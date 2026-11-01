@@ -50,13 +50,15 @@ def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: 
     """Queue `count` images of one prompt. Raises GenerateError; the caller's transaction then rolls back, so a
     refused submit leaves nothing behind."""
     if model not in MODELS:
-        raise GenerateError(f"unknown model {model!r}")
+        raise GenerateError(f"Unknown model {model!r}")
     if preset not in PRESETS:
-        raise GenerateError(f"unknown preset {preset!r}")
+        raise GenerateError(f"Unknown preset {preset!r}")
     if not 1 <= count <= MAX_COUNT:
-        raise GenerateError(f"count must be 1-{MAX_COUNT}")
-    if pending_count(s, user) + count > max_pending:
-        raise GenerateError(f"you already have images in the queue; at most {max_pending} at a time", 429)
+        raise GenerateError(f"Count must be 1-{MAX_COUNT}")
+    queued = pending_count(s, user)
+    if queued + count > max_pending:
+        raise GenerateError(f"You have {queued} image{'s' if queued != 1 else ''} in the queue and the limit is "
+                            f"{max_pending}. Wait for some to finish.", 429)
     full = PRESETS[preset].apply(prompt)
     arts = []
     for i in range(count):
