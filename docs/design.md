@@ -56,17 +56,20 @@ Objects live in an AIStor bucket (`gen-ai-platform`), metadata in Postgres.
   a callback. New gpu-scheduler adapter runs `sd-server` (stable-diffusion.cpp,
   CUDA build) with three files per model: diffusion GGUF, Qwen3 text encoder GGUF (Qwen3-4B for 4B, Qwen3-8B for 9B), and
   the shared FLUX.2 VAE (`Comfy-Org/flux2-klein-4B` `split_files/vae/flux2-vae.safetensors`).
-- **Output path** ❓ — gpu-scheduler results are JSON and inputs are URLs. Proposal: the platform puts a
-  presigned PUT URL for the original in the job; the adapter uploads the PNG there; the result carries
-  only metadata. Reference images for edits go in as presigned GETs, as photo-dump already does.
+- **Output path** ✅ (gpu-scheduler `models/sdcpp.py`, live 2026-11-01): the platform puts a presigned PUT URL
+  for the original in the job (`output_url`); the adapter uploads the PNG there and the result carries only
+  metadata (seed, size, steps, model, bytes, seconds). Reference images for edits go in as `ref_images`
+  (`{"image_url"}` presigned GETs, up to 4). The adapter always picks and returns the seed. Same seed reproduces
+  an image only on the same GPU.
 - **GPU: the 3080 on ainode (12 GB)** (decided 2026-11-01), queued with the other gpu-scheduler models.
 
 | | 4B | 9B |
 |---|---|---|
 | Files | `flux-2-klein-4b-Q4_K_S.gguf` 2.6 GB + `Qwen3-4B-Q4_K_M.gguf` 2.5 GB | `flux-2-klein-9b-Q4_K_M.gguf` 5.7 GB + `Qwen3-8B-Q4_K_M.gguf` 5.0 GB |
-| 1024², 4 steps, 5080 (measured) | 4.2 s generate, 5.5 s per sd-cli run | 6.4–6.8 s generate, 7.2–7.8 s per run |
-| Peak VRAM, 5080 (measured) | ⚠ unverified | ~12.6 GB above a 1.7 GB desktop baseline, sd-cli defaults |
-| On the 3080 | ⚠ unverified | ⚠ unverified — at 12.6 GB likely needs `--offload-to-cpu` (weights in RAM, moved per stage) |
+| 1024², 4 steps, 5080, warm sd-server (measured) | 1.96 s; reference edit 4.5 s | 3.4 s; edit 7.3 s |
+| Peak VRAM, 5080 (measured) | 8.2 GB | 12.5 GB — over the 3080's 12 |
+| **3080, prod (measured 2026-11-01)** | **2.9 s warm; edit 6.7 s; 8.1 GB peak** | **with `--offload-to-cpu`: 6.3 s warm; edit 13.5 s; 8.7 GB peak** |
+| 3080 first job after a fresh PVC (download + load + image) | 137.5 s | 276.9 s |
 
   Weights: the user's unsloth GGUFs; text encoders from `unsloth/Qwen3-4B-GGUF` and `unsloth/Qwen3-8B-GGUF`.
 - **Licences differ.** klein 4B is Apache 2.0. klein 9B is under the **FLUX Non-Commercial License**
@@ -120,8 +123,8 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
 
 ## 9. Phases 📐 (proposal)
 
-1. gpu-scheduler `flux2-klein-4b` and `flux2-klein-9b` adapters (sd-server, presigned upload) + smoke
-   test and VRAM measurement on the 3080.
+1. ✅ gpu-scheduler `flux2-klein-4b` and `flux2-klein-9b` adapters (sd-server, presigned upload), live and
+   smoke-tested on the 3080 2026-11-01 (gpu-scheduler sha-5781dffbc4c0).
 2. Platform core: auth, splash, projects (public/private), generate, artifacts, storage, grid UI.
 3. MCP server with OAuth.
 4. Tweaks and lineage; `sprite` preset and post-processing variants.
@@ -129,5 +132,5 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
 
 ## 10. Open questions ❓
 
-- Output path from gpu-scheduler: presigned PUT upload by the adapter (§4) — confirm when building phase 1.
-- Does 9B fit the 3080, and at what speed with offload? (§4, measured in phase 1)
+- None blocking phase 2. Later: Qwen-Image (the user's "Qwen Image Max 2512") as a third model — sd.cpp has
+  Qwen-Image recipes, so it would be another `sdcpp` adapter entry (tabled 2026-11-01).

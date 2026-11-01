@@ -11,6 +11,7 @@ artifact it was tweaked from; artifacts are organised into public or private pro
 (default) and 9B, selectable per request. Built first for game sprites, but sprites are a preset, not
 the whole product. Served at genai.danwils.com (planned).
 
-Status: design only. See [`docs/design.md`](docs/design.md).
+Status: phase 1 done 2026-11-01 — both models live in gpu-scheduler on the 3080; platform (phase 2) not started.
+See [`docs/design.md`](docs/design.md).
 
 Prototype scripts (sd.cpp + sprite cleanup): `ai/model-test-scripts/flux2_klein/`.
