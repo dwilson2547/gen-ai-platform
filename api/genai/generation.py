@@ -27,6 +27,7 @@ log = logging.getLogger("genai.generation")
 
 PENDING = ("queued", "running")
 MAX_COUNT = 4
+OPS = ("generate", "reroll", "edit_prompt", "edit_image")
 
 
 class GenerateError(Exception):
@@ -46,9 +47,11 @@ def pending_count(s: Session, user: User) -> int:
 
 def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: Project, *, prompt: str,
            preset: str, model: str, width: int, height: int, seed: int | None, count: int, steps: int | None,
-           max_pending: int) -> list[Artifact]:
+           max_pending: int, parent: Artifact | None = None, op: str = "generate",
+           reference: Artifact | None = None) -> list[Artifact]:
     """Queue `count` images of one prompt. Raises GenerateError; the caller's transaction then rolls back, so a
-    refused submit leaves nothing behind."""
+    refused submit leaves nothing behind. `parent`/`op` record a tweak's lineage; `reference` is an image the model
+    edits from (FLUX.2 klein reference editing)."""
     if model not in MODELS:
         raise GenerateError(f"Unknown model {model!r}")
     if preset not in PRESETS:
@@ -59,15 +62,21 @@ def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: 
     if queued + count > max_pending:
         raise GenerateError(f"You have {queued} image{'s' if queued != 1 else ''} in the queue and the limit is "
                             f"{max_pending}. Wait for some to finish.", 429)
+    if reference is not None and (reference.status != "done" or not reference.image_key):
+        raise GenerateError("The image to edit from isn't finished")
     full = PRESETS[preset].apply(prompt)
     arts = []
     for i in range(count):
         a = Artifact(project_id=project.id, created_by=user.id, prompt=prompt.strip(), full_prompt=full,
                      preset=preset, model=model, width=width, height=height, steps=steps,
-                     seed=None if seed is None else seed + i)
+                     seed=None if seed is None else seed + i, parent_id=parent.id if parent else None, op=op)
         s.add(a)
         arts.append(a)
     s.flush()                                                   # ids, for the storage keys
+    ref = None
+    if reference is not None:
+        url = store.presign_get(reference.image_key)
+        ref = {"image_url": url} if url else {"image_b64": base64.b64encode(b"".join(store.get(reference.image_key))).decode()}
     inputs = []
     for a in arts:
         a.image_key = image_key(a.id)
@@ -78,6 +87,8 @@ def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: 
             item["steps"] = steps
         if url := store.presign_put(a.image_key):
             item["output_url"] = url
+        if ref:
+            item["ref_images"] = [ref]
         inputs.append(item)
     try:
         job_ids = scheduler.submit(model, inputs)
@@ -158,3 +169,32 @@ class Poller:
             except Exception:                                   # noqa: BLE001
                 log.exception("poller round failed")
             self._stop.wait(self.interval)
+
+
+def tweak(s: Session, scheduler: Scheduler, store: Store, user: User, parent: Artifact, target: Project, *, op: str,
+          prompt: str | None, seed: int | None, count: int, model: str | None, max_pending: int) -> list[Artifact]:
+    """New artifacts made from `parent` (design §1), linked to it:
+    - reroll: the same recipe with a new seed (random unless given), to explore.
+    - edit_prompt: a changed prompt with the parent's seed (unless given), so the difference is the prompt's.
+    - edit_image: an instruction ("same character, holding an axe") applied to the parent's image itself; the preset's
+      template is not applied, since the instruction is about the picture, not a subject.
+    Re-rolling or re-wording an image that is itself an edit redoes that edit from the same source image.
+    `target` is the project they go into (one of the user's own); the caller decides it."""
+    if op not in ("reroll", "edit_prompt", "edit_image"):
+        raise GenerateError(f"Unknown tweak {op!r}: reroll, edit_prompt or edit_image")
+    if op in ("edit_prompt", "edit_image") and not (prompt or "").strip():
+        raise GenerateError("This tweak needs a prompt" if op == "edit_prompt" else "Say what to change in the image")
+    common = dict(model=model or parent.model, width=parent.width, height=parent.height, steps=parent.steps,
+                  count=count, max_pending=max_pending, parent=parent, op=op)
+    # Re-rolling or re-wording an edit redoes the edit: same reference image (the edit's own source), so the subject
+    # stays the one being edited instead of being drawn from scratch.
+    source = s.get(Artifact, parent.parent_id) if parent.op == "edit_image" and parent.parent_id else None
+    redo = source is not None and source.status == "done" and bool(source.image_key)
+    if op == "reroll":
+        return create(s, scheduler, store, user, target, prompt=parent.prompt, preset=parent.preset, seed=seed,
+                      reference=source if redo else None, **common)
+    if op == "edit_prompt":
+        return create(s, scheduler, store, user, target, prompt=prompt, preset=parent.preset,
+                      seed=parent.seed if seed is None else seed, reference=source if redo else None, **common)
+    return create(s, scheduler, store, user, target, prompt=prompt, preset="none", seed=seed, reference=parent,
+                  **common)

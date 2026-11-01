@@ -94,6 +94,15 @@ def iso(dt: datetime | None) -> str | None:
     return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
 
 
+class TweakIn(BaseModel):
+    op: str
+    prompt: str | None = Field(default=None, max_length=4000)
+    seed: int | None = Field(default=None, ge=0, lt=2 ** 31)
+    count: int = Field(default=1, ge=1, le=generation.MAX_COUNT)
+    model: str | None = None
+    project_id: str | None = None
+
+
 def project_out(p: Project, user: User, count: int = 0, cover: str | None = None) -> dict:
     return {"id": p.id, "name": p.name, "description": p.description, "visibility": p.visibility,
             "is_default": p.is_default, "owner": p.owner.username, "mine": p.owner_id == user.id,
@@ -109,7 +118,7 @@ def artifact_out(a: Artifact) -> dict:
         "prompt": a.prompt, "full_prompt": a.full_prompt, "preset": a.preset,
         "model": a.model, "model_label": m.label if m else a.model, "commercial": m.commercial if m else None,
         "seed": a.seed, "width": a.width, "height": a.height, "steps": a.steps, "cfg_scale": a.cfg_scale,
-        "parent_id": a.parent_id, "op": a.op, "status": a.status, "error": a.error,
+        "parent_id": a.parent_id, "op": a.op, "status": a.status, "error": a.error, "title": a.title,
         "ran_model": a.ran_model, "worker": a.worker, "seconds": a.seconds, "bytes": a.bytes,
         "finished_at": iso(a.finished_at),
         "image_url": f"/api/artifacts/{a.id}/image" if a.status == "done" else None,
@@ -343,9 +352,40 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         return {"artifacts": [artifact_out(a) for a in rows],
                 "next": iso(rows[-1].created_at) if len(rows) == max(1, min(limit, 100)) else None}
 
+    def lineage(s: Session, a: Artifact, user: User) -> dict:
+        """The image this one was made from and the ones made from it, as far as the user can see them."""
+        parent = s.get(Artifact, a.parent_id) if a.parent_id else None
+        if parent is not None and not access.can_view(parent.project, user):
+            parent = None
+        kids = list(s.scalars(select(Artifact).join(Project, Artifact.project_id == Project.id)
+                              .where(Artifact.parent_id == a.id, access.visible_projects_clause(user))
+                              .order_by(Artifact.created_at.desc()).limit(48)))
+        return {"parent": artifact_out(parent) if parent else None, "children": [artifact_out(k) for k in kids]}
+
     @app.get("/api/artifacts/{artifact_id}")
     def get_artifact(artifact_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
-        return artifact_out(access.artifact_for_view(s, artifact_id, user))
+        a = access.artifact_for_view(s, artifact_id, user)
+        return {**artifact_out(a), **lineage(s, a, user)}
+
+    def tweak_target(s: Session, user: User, parent: Artifact, project_id: str | None) -> Project:
+        """Where a tweak goes: the project asked for (one of yours), else the parent's if it is yours, else Scratch."""
+        if project_id:
+            return access.project_for_write(s, project_id, user)
+        if parent.project.owner_id == user.id:
+            return parent.project
+        return auth.ensure_default_project(s, user)
+
+    @app.post("/api/artifacts/{artifact_id}/tweak", status_code=202)
+    def tweak(artifact_id: str, body: TweakIn, user: User = Depends(user_dep), s: Session = Depends(session)):
+        parent = access.artifact_for_view(s, artifact_id, user)
+        arts = gen_error(generation.tweak, s, scheduler, store, user, parent,
+                         tweak_target(s, user, parent, body.project_id), op=body.op, prompt=body.prompt,
+                         seed=body.seed, count=body.count, model=body.model,
+                         max_pending=settings.max_pending_per_user)
+        s.flush()
+        for a in arts:
+            s.refresh(a)
+        return {"artifacts": [artifact_out(a) for a in arts]}
 
     @app.delete("/api/artifacts/{artifact_id}")
     def delete_artifact(artifact_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):

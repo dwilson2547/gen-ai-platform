@@ -36,8 +36,10 @@ export type Artifact = {
   seed: number | null; width: number; height: number; steps: number | null; cfg_scale: number | null;
   parent_id: string | null; op: string; status: Status; error: string | null; ran_model: string | null;
   worker: string | null; seconds: number | null; bytes: number | null; finished_at: string | null;
-  image_url: string | null;
+  image_url: string | null; title: string | null;
 };
+export type ArtifactFull = Artifact & { parent: Artifact | null; children: Artifact[] };
+export type TweakOp = "reroll" | "edit_prompt" | "edit_image";
 export type GenerateIn = {
   prompt: string; project_id?: string; preset: string; model: string; width: number; height: number;
   seed?: number; count: number; steps?: number;
@@ -65,7 +67,9 @@ export const api = {
   generate: (b: GenerateIn) => call<{ artifacts: Artifact[] }>("POST", "/api/generate", b),
   artifacts: (o: { project_id?: string; before?: string | null; limit?: number }) =>
     call<{ artifacts: Artifact[]; next: string | null }>("GET", "/api/artifacts" + qs(o)),
-  artifact: (id: string) => call<Artifact>("GET", `/api/artifacts/${id}`),
+  artifact: (id: string) => call<ArtifactFull>("GET", `/api/artifacts/${id}`),
+  tweak: (id: string, b: { op: TweakOp; prompt?: string; count?: number; seed?: number }) =>
+    call<{ artifacts: Artifact[] }>("POST", `/api/artifacts/${id}/tweak`, b),
   deleteArtifact: (id: string) => call<{ ok: boolean }>("DELETE", `/api/artifacts/${id}`),
 };
 

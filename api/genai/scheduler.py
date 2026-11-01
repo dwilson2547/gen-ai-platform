@@ -87,6 +87,12 @@ class LocalSdServer:
         seed = item.get("seed", random.randrange(2 ** 31))
         body = {"prompt": item["prompt"], "width": item["width"], "height": item["height"], "seed": seed,
                 "steps": item.get("steps", 4), "cfg_scale": 1.0}
+        refs = []
+        for ref in item.get("ref_images", []):
+            refs.append(ref["image_b64"] if "image_b64" in ref
+                        else __import__("base64").b64encode(httpx.get(ref["image_url"], timeout=60).content).decode())
+        if refs:
+            body["extra_images"] = refs
         t = time.monotonic()
         try:
             r = httpx.post(self.url + "/sdapi/v1/txt2img", json=body, timeout=600)

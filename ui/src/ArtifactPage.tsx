@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, pending, type Artifact } from "./api.ts";
+import { api, pending, type Artifact, type ArtifactFull } from "./api.ts";
+import { Grid } from "./Grid.tsx";
+import { TweakPanel } from "./Tweak.tsx";
 import { Confirm } from "./Modal.tsx";
 import { Link, navigate } from "./router.tsx";
 import { dropFromLastList, neighbours, useApp } from "./state.tsx";
@@ -7,7 +9,8 @@ import { dropFromLastList, neighbours, useApp } from "./state.tsx";
 // One image and its recipe (workflow 4).
 export function ArtifactPage({ id }: { id: string }) {
   const { projects, reloadProjects, catalogue } = useApp();
-  const [a, setA] = useState<Artifact | null>(null);
+  const [a, setA] = useState<ArtifactFull | null>(null);
+  const [kids, setKids] = useState<Artifact[]>([]);
   const [missing, setMissing] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -16,10 +19,18 @@ export function ArtifactPage({ id }: { id: string }) {
   const [zoom, setZoom] = useState(false);
   const { prev, next } = neighbours(id);
 
-  useEffect(() => { api.artifact(id).then(setA).catch(() => setMissing(true)); }, [id]);
+  useEffect(() => { api.artifact(id).then(x => { setA(x); setKids(x.children); }).catch(() => setMissing(true)); }, [id]);
+  useEffect(() => {                      // keep queued variations fresh
+    if (!kids.some(pending)) return;
+    const t = setTimeout(async () => {
+      const fresh = await Promise.all(kids.map(k => pending(k) ? api.artifact(k.id).catch(() => k) : Promise.resolve(k)));
+      setKids(fresh);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [kids]);
   useEffect(() => {                      // keep a pending one fresh
     if (!a || !pending(a)) return;
-    const t = setTimeout(() => api.artifact(id).then(setA).catch(() => {}), 1500);
+    const t = setTimeout(() => api.artifact(id).then(x => setA(x)).catch(() => {}), 1500);
     return () => clearTimeout(t);
   }, [a, id]);
   useEffect(() => {
@@ -74,10 +85,14 @@ export function ArtifactPage({ id }: { id: string }) {
             </div>
             {mineProject && <button className="danger ghost" onClick={() => setConfirm(true)}>Delete</button>}
           </div>
+          <TweakPanel a={a} onQueued={k => setKids(cur => [...k, ...cur])} />
           {a.commercial === false && <p className="warn small">{a.model_label} is under a non-commercial licence: this image may not be used commercially.</p>}
           <dl>
             <dt>Project</dt><dd><Link to={`/p/${a.project.id}`}>{a.project.name}</Link> <span className={`vis ${a.project.visibility}`}>{a.project.visibility}</span></dd>
             <dt>Model</dt><dd>{a.model_label}{a.ran_model && a.ran_model !== a.model ? ` (ran on ${a.ran_model})` : ""}</dd>
+            {a.parent && <><dt>Made from</dt><dd><Link to={`/a/${a.parent.id}`} className="made-from">
+              {a.parent.image_url && <img src={a.parent.image_url} alt="" className={a.parent.preset === "sprite" ? "pixel" : ""} />}
+              <span>{opLabel(a.op)}</span></Link></dd></>}
             <dt>Preset</dt><dd>{catalogue.presets.find(p => p.name === a.preset)?.label ?? a.preset}</dd>
             <dt>Seed</dt><dd>{a.seed ?? "—"}</dd>
             <dt>Size</dt><dd>{a.width} × {a.height}</dd>
@@ -90,8 +105,16 @@ export function ArtifactPage({ id }: { id: string }) {
             <details><summary className="small">Full prompt sent to the model</summary><p className="small mono">{a.full_prompt}</p></details>)}
         </aside>
       </div>
+      {kids.length > 0 && <>
+        <h2 className="section">Made from this</h2>
+        <Grid items={kids} loading={false} error={null} next={null} more={() => {}} retry={() => {}} empty="" />
+      </>}
       {confirm && <Confirm title="Delete this image?" body="It's removed for good, including from the project." action="Delete"
         busy={busy} error={delError} onConfirm={del} onClose={() => setConfirm(false)} />}
     </div>
   );
+}
+
+function opLabel(op: string) {
+  return op === "reroll" ? "re-rolled from" : op === "edit_prompt" ? "prompt changed from" : op === "edit_image" ? "edited from" : "from";
 }

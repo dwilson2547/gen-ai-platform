@@ -29,7 +29,7 @@ export function useArtifacts(projectId?: string) {
     const t = setInterval(async () => {
       const ids = itemsRef.current.filter(pending).map(a => a.id);
       const fresh = await Promise.all(ids.map(id => api.artifact(id).catch(() => null)));
-      const byId = new Map(fresh.filter((a): a is Artifact => !!a).map(a => [a.id, a]));
+      const byId = new Map(fresh.filter((a): a is NonNullable<typeof a> => !!a).map(a => [a.id, a as Artifact]));
       setItems(cur => cur.map(a => byId.get(a.id) ?? a));
     }, 1500);
     return () => clearInterval(t);
@@ -43,7 +43,12 @@ export function useArtifacts(projectId?: string) {
   };
 }
 
-export function Grid({ items, loading, error, next, more, retry, empty }: ReturnType<typeof useArtifacts> & { empty: string }) {
+type GridProps = {
+  items: Artifact[]; loading: boolean; error: string | null; next: string | null;
+  more: () => unknown; retry: () => unknown; empty: string;
+};
+
+export function Grid({ items, loading, error, next, more, retry, empty }: GridProps) {
   const open = (id: string) => { setLastList(items.map(a => a.id)); navigate(`/a/${id}`); };
   if (error) return <div className="banner error">Couldn't load images: {error} <button onClick={retry}>Retry</button></div>;
   if (loading && items.length === 0) return <div className="grid">{Array.from({ length: 8 }, (_, i) => <div key={i} className="card skel" />)}</div>;
@@ -65,7 +70,7 @@ function Card({ a, onOpen }: { a: Artifact; onOpen: () => void }) {
         : a.status === "failed"
           ? <div className="state"><strong>Failed</strong><span className="small">{a.error}</span></div>
           : <div className="state"><div className="spinner" /><span>{a.status === "running" ? "Generating" : "Queued"} · {since}s</span></div>}
-      <div className="cap"><span className="small">{a.prompt}</span>{a.commercial === false && <span className="badge nc" title="Non-commercial licence">NC</span>}</div>
+      <div className="cap"><span className="small">{a.prompt}</span>{a.op !== "generate" && <span className="badge op" title={a.op.replace("_", " ")}>{a.op === "reroll" ? "↻" : "✎"}</span>}{a.commercial === false && <span className="badge nc" title="Non-commercial licence">NC</span>}</div>
     </button>
   );
 }

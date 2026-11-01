@@ -29,7 +29,7 @@ def test_tools_listed(agent):
     mcp, _, _ = agent
     names = {t["name"] for t in mcp.rpc("tools/list").json()["result"]["tools"]}
     assert names == {"list_models_and_presets", "list_projects", "create_project", "generate", "get_artifact",
-                     "get_image", "list_artifacts"}
+                     "get_image", "list_artifacts", "tweak"}
 
 
 def test_generate_waits_and_returns_done_images(agent):
@@ -148,3 +148,12 @@ def test_tokens_cannot_use_the_rest_of_the_api(agent):
     hdr = {"Authorization": f"Bearer {mcp.token}", "X-Genai": "1"}
     assert http.get("/api/projects", headers=hdr).status_code == 401
     assert http.post("/api/tokens", json={"name": "more"}, headers=hdr).status_code == 401
+
+
+def test_tweak_tool_links_to_its_original(agent):
+    mcp, _, _ = agent
+    a = mcp.call("generate", prompt="a dwarf blacksmith", preset="sprite", seed=7)["artifacts"][0]
+    edit = mcp.call("tweak", artifact_id=a["id"], op="edit_image", prompt="same dwarf, holding an axe")["artifacts"][0]
+    assert edit["made_from"] == a["id"] and edit["op"] == "edit_image" and edit["status"] == "done"
+    assert [k["id"] for k in mcp.call("get_artifact", artifact_id=a["id"])["made_into"]] == [edit["id"]]
+    assert "needs a prompt" in mcp.error("tweak", artifact_id=a["id"], op="edit_prompt")

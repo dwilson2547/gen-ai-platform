@@ -48,6 +48,9 @@ made each one. You act for the signed-in user who connected you, with their perm
   To save the full-size file, fetch download_url (e.g. `curl -fo assets/mage.png "<download_url>"`): it needs no token
   and expires after 10 minutes (download_expires_at); call get_artifact again for a fresh one.
 - The same seed with the same prompt and settings reproduces an image (on the same GPU); vary the seed to explore.
+- tweak makes new images from an existing one: reroll (new seed), edit_prompt (changed prompt, same seed) or
+  edit_image (an instruction applied to the picture itself: "same character, holding an axe"). edit_image keeps a
+  character consistent across variants and poses; generating from scratch does not.
 - list_artifacts finds earlier images by prompt text or project. Reuse what exists before generating near-duplicates.
 - Each user can have a limited number of images queued at once; if generate says the queue is full, wait for some to
   finish rather than retrying in a loop.
@@ -117,6 +120,8 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
             out["download_url"], out["download_expires_at"] = base + path, expires
         if a.status == "failed":
             out["error"] = a.error
+        if a.parent_id:
+            out["made_from"], out["op"] = a.parent_id, a.op
         return out
 
     def find_project(s: Session, user: User, ref: str, write: bool) -> Project:
@@ -202,7 +207,9 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                                      width=width, height=height, seed=seed, count=count, steps=steps,
                                      max_pending=settings.max_pending_per_user)
             return [a.id for a in arts]
-        ids = run(ctx, submit)
+        return wait_for(run(ctx, submit), wait_seconds)
+
+    def wait_for(ids: list[str], wait_seconds: int) -> dict:
         deadline = time.monotonic() + wait_seconds
         while True:
             poller.poll_once()
@@ -218,13 +225,43 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
             time.sleep(1.0)
 
     @server.tool()
+    def tweak(ctx: Context, artifact_id: str, op: Literal["reroll", "edit_prompt", "edit_image"],
+              prompt: Annotated[str | None, Field(max_length=4000)] = None,
+              seed: Annotated[int | None, Field(ge=0, lt=2 ** 31)] = None,
+              count: Annotated[int, Field(ge=1, le=generation.MAX_COUNT)] = 1,
+              model: str | None = None, project: str | None = None,
+              wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
+        """New images made from an existing one, linked to it (made_from):
+        - reroll: same recipe, new seed (random unless given). For "more like this".
+        - edit_prompt: a changed prompt, same seed (unless given), same settings. For "the same but with ...".
+        - edit_image: `prompt` is an instruction applied to the image itself, e.g. "same character, now holding an
+          axe", "make it night time". Keeps the subject consistent; use it for variants of one character or object.
+        Goes into `project` (one of yours), else the original's project if it's yours, else your Scratch project."""
+        def submit(s, user):
+            parent = access.artifact_for_view(s, artifact_id, user)
+            if project:
+                target = find_project(s, user, project, write=True)
+            elif parent.project.owner_id == user.id:
+                target = parent.project
+            else:
+                target = auth.ensure_default_project(s, user)
+            arts = generation.tweak(s, scheduler, store, user, parent, target, op=op, prompt=prompt, seed=seed,
+                                    count=count, model=model, max_pending=settings.max_pending_per_user)
+            return [a.id for a in arts]
+        return wait_for(run(ctx, submit), wait_seconds)
+
+    @server.tool()
     def get_artifact(ctx: Context, artifact_id: str) -> dict:
         """One image's status and recipe (prompt as given and as sent to the model, model, seed, size, steps), with
         its web page and, once done, a fresh download_url (no token needed, valid 10 minutes)."""
         def go(s, user):
             a = access.artifact_for_view(s, artifact_id, user)
+            kids = list(s.scalars(select(Artifact).join(Project, Artifact.project_id == Project.id)
+                                  .where(Artifact.parent_id == a.id, access.visible_projects_clause(user))
+                                  .order_by(Artifact.created_at.desc()).limit(20)))
             return {**brief(a, s), "full_prompt": a.full_prompt, "steps": a.steps, "gpu_seconds": a.seconds,
-                    "created_at": a.created_at.isoformat()}
+                    "created_at": a.created_at.isoformat(),
+                    "made_into": [{"id": k.id, "op": k.op, "status": k.status, "prompt": k.prompt} for k in kids]}
         poller.poll_once()
         return run(ctx, go)
 

@@ -29,6 +29,7 @@ class Store(Protocol):
     def size(self, key: str) -> int | None: ...
     def delete(self, key: str) -> None: ...
     def presign_put(self, key: str) -> str | None: ...
+    def presign_get(self, key: str) -> str | None: ...
 
 
 class MemoryStore:
@@ -52,6 +53,9 @@ class MemoryStore:
 
     def presign_put(self, key):
         return f"{self.presign_base}/{key}?sig=test" if self.presign_base else None
+
+    def presign_get(self, key):
+        return f"{self.presign_base}/{key}?sig=get" if self.presign_base else None
 
 
 class DirStore:
@@ -93,6 +97,9 @@ class DirStore:
             pass
 
     def presign_put(self, key):
+        return None
+
+    def presign_get(self, key):
         return None
 
 
@@ -142,6 +149,10 @@ class S3Store:
 
     def presign_put(self, key):
         return self.client.presigned_put_object(self.bucket, key, expires=UPLOAD_URL_TTL)
+
+    def presign_get(self, key):
+        # A reference image for an edit: gpu-scheduler fetches it when the job runs, which may be a while.
+        return self.client.presigned_get_object(self.bucket, key, expires=UPLOAD_URL_TTL)
 
 
 def from_settings(settings: Settings) -> Store:
