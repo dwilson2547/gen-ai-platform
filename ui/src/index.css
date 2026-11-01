@@ -153,3 +153,18 @@ details summary { cursor: pointer; color: var(--muted); }
 .vis-pick { border: 1px solid var(--line); border-radius: 8px; padding: .6em .8em; display: flex; flex-direction: column; gap: .5em; }
 .vis-pick label { flex-direction: row; align-items: flex-start; gap: .6em; }
 .actions { display: flex; justify-content: flex-end; gap: .6em; }
+
+/* agents */
+.agents { max-width: 900px; }
+.panel-box { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 1em 1.2em; }
+.panel-box h3 { font-size: 1.05rem; }
+.panel-box p { margin: .4em 0; }
+code { font-family: ui-monospace, monospace; background: var(--panel2); padding: .1em .35em; border-radius: 5px; overflow-wrap: anywhere; }
+button.small { padding: .2em .55em; font-size: .8rem; }
+.row-form { display: flex; gap: .6em; align-items: center; flex-wrap: wrap; margin: .6em 0; }
+.row-form input { min-width: 240px; }
+.banner.created { border-color: var(--ok); margin: .6em 0; }
+.banner.created code.token { display: inline-block; margin-top: .3em; }
+table.rows { width: 100%; border-collapse: collapse; margin-top: .4em; }
+table.rows td { padding: .5em .3em; border-top: 1px solid var(--line); vertical-align: middle; }
+table.rows td:last-child { text-align: right; }

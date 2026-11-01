@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type Catalogue, type Config, type Me } from "./api.ts";
+import { Agents } from "./Agents.tsx";
 import { ArtifactPage } from "./ArtifactPage.tsx";
 import { Home } from "./Home.tsx";
 import { ProjectPage } from "./ProjectPage.tsx";
@@ -41,6 +42,7 @@ function Shell({ me }: { me: Me }) {
   let m;
   if (path === "/" || path === "") page = <Home />;
   else if (path === "/projects") page = <Projects />;
+  else if (path === "/agents") page = <Agents />;
   else if ((m = path.match(/^\/p\/([0-9a-f]{32})$/))) page = <ProjectPage key={m[1]} id={m[1]} />;
   else if ((m = path.match(/^\/a\/([0-9a-f]{32})$/))) page = <ArtifactPage key={m[1]} id={m[1]} />;
   else page = <div className="panel"><h2>Not found</h2><Link to="/">Back home</Link></div>;
@@ -51,6 +53,7 @@ function Shell({ me }: { me: Me }) {
         <nav>
           <Link to="/" className={path === "/" ? "on" : ""}>Generate</Link>
           <Link to="/projects" className={path.startsWith("/p") ? "on" : ""}>Projects</Link>
+          <Link to="/agents" className={path === "/agents" ? "on" : ""}>Agents</Link>
         </nav>
         <div className="who">
           <span className="muted" title={me.username}>{me.display_name || me.username}</span>

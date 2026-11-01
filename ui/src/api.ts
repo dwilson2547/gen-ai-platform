@@ -70,3 +70,12 @@ export const api = {
 };
 
 export const pending = (a: Artifact) => a.status === "queued" || a.status === "running";
+
+export type TokenRow = { id: string; name: string; prefix: string; created_at: string; last_used_at: string | null };
+export type GrantRow = { id: string; client_name: string; created_at: string; last_used_at: string | null };
+export const agentsApi = {
+  get: () => call<{ mcp_url: string; tokens: TokenRow[]; grants: GrantRow[] }>("GET", "/api/agents"),
+  createToken: (name: string) => call<TokenRow & { token: string; mcp_url: string }>("POST", "/api/tokens", { name }),
+  revokeToken: (id: string) => call<{ ok: boolean }>("DELETE", `/api/tokens/${id}`),
+  revokeGrant: (id: string) => call<{ ok: boolean }>("DELETE", `/api/oauth/grants/${id}`),
+};

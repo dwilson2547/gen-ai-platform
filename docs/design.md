@@ -116,16 +116,24 @@ A preset = prompt template + default size/steps + post-processing chain. Generat
 Post-processing runs in the platform (CPU, Pillow), not on the GPU, and can be re-run on an existing
 artifact with new params, producing a new variant.
 
-## 6. MCP tools 📐
+## 6. MCP tools ✅ (0.2.0, `api/genai/mcp_server.py`, OAuth `oauth.py`, tokens `tokens.py`)
 
-- `list_projects`, `create_project(name, visibility)`, `update_project`
-- `generate(prompt, project?, preset?, model? (4b default | 9b), size?, seed?, count?)` → artifact ids (waits up to N seconds,
-  then returns status so long batches don't block)
-- `tweak(artifact_id, op, prompt?, seed?, project?)` — re-roll, edit prompt, edit from image
-- `postprocess(artifact_id, preset_or_params)`
-- `search_artifacts(query?, project?, tags?)`, `get_artifact(id)` — returns metadata and image URLs;
-  `get_image(id, variant)` returns the image itself so the agent can look at it
-- `list_presets`
+Streamable HTTP at `/mcp` (stateless, JSON). Auth is webdoc's: OAuth with dynamic client registration and a consent
+page (sign-in through authentik on the way if needed), or a personal access token from the Agents page. Agents act as
+their user with the web UI's visibility rules; no tool deletes anything or changes a project's visibility.
+
+- `list_models_and_presets`, `list_projects`, `create_project(name, description, visibility)`
+- `generate(prompt, project?, preset?, model?, width?, height?, seed?, count?, steps?, wait_seconds=60)` → artifacts;
+  waits (≤120 s) for them, returning anything still pending with its status. 9B results carry a non-commercial note.
+- `get_artifact(id)`: recipe, status, web page, and once done a `download_url` that accepts the same bearer token.
+- `get_image(id, size=preview|full)`: the image as MCP image content (preview fits 512 px, nearest-neighbour for
+  sprites) so the agent can look at it.
+- `list_artifacts(query?, project?, mine_only?, limit, before)`: prompt-text search over what the user can see.
+- Tweak/edit tools come with phase 4.
+
+Verified 2026-11-01: 15 MCP/OAuth tests (full browser OAuth flow incl. sign-in detour, refresh rotation, revoke), and
+the SDK's own streamable-HTTP client against a local sd-server (create_project → generate into it by name → get_image →
+bearer download → search).
 
 ## 7. Web UI 📐
 
@@ -156,7 +164,7 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
      `helm/gen-ai-platform` (Argo app `gen-ai-platform` in cluster-config), authentik blueprint bound to
      `gen-ai-platform-users`, `scripts/create-secrets.sh` for the database, gpu-scheduler token, bucket keys and OIDC
      secret. Image checked locally: read-only root, non-root, against Postgres 17.
-3. MCP server with OAuth.
+3. ✅ MCP server with OAuth (0.2.0).
 4. Tweaks and lineage; `sprite` preset and post-processing variants.
 5. More presets.
 

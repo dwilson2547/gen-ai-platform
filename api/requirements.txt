@@ -6,3 +6,4 @@ psycopg[binary]>=3.1
 PyJWT[crypto]>=2.8
 minio>=7.2,<8
 pillow>=10
+mcp>=2.3,<3

@@ -5,7 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -19,6 +20,9 @@ def new_id() -> str:
 
 class Base(DeclarativeBase):
     pass
+
+
+Json = JSON().with_variant(JSONB(), "postgresql")
 
 
 class User(Base):
@@ -122,3 +126,74 @@ class Artifact(Base):
 
     project: Mapped[Project] = relationship()
     creator: Mapped[User] = relationship()
+
+
+# --- agents: personal access tokens and OAuth for MCP clients (copied from webdoc) -----------------------------------
+
+class AccessToken(Base):
+    """A personal access token for MCP clients. Stored hashed like sessions; `prefix` is the visible start of the token
+    so a user can tell them apart."""
+    __tablename__ = "access_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    prefix: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class OAuthClient(Base):
+    """An MCP client that registered itself (RFC 7591). `info` is the SDK's OAuthClientInformationFull as JSON."""
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    info: Mapped[dict] = mapped_column(Json)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OAuthRequest(Base):
+    """An /authorize request waiting on the consent page. `user_id` and `nonce` are filled when the page is shown, so
+    only that signed-in user's form submission can approve it."""
+    __tablename__ = "oauth_requests"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("oauth_clients.client_id", ondelete="CASCADE"))
+    params: Mapped[dict] = mapped_column(Json)
+    user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    nonce: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthCode(Base):
+    __tablename__ = "oauth_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("oauth_clients.client_id", ondelete="CASCADE"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    params: Mapped[dict] = mapped_column(Json)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthGrant(Base):
+    """One connected app for one user: the current access and refresh token, rotated in place on refresh. Deleting the
+    row disconnects the app."""
+    __tablename__ = "oauth_grants"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True)
+    client_name: Mapped[str] = mapped_column(String(100))
+    scopes: Mapped[str] = mapped_column(String(200), default="")
+    resource: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    access_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    refresh_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped[User] = relationship()

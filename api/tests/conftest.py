@@ -1,6 +1,7 @@
 import base64
 import io
 import itertools
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -49,6 +50,7 @@ class FakeScheduler:
         self.submitted: list[tuple[str, list[dict]]] = []
         self.jobs: dict[str, dict] = {}
         self.down = False
+        self.auto_finish = False            # finish every job as soon as it is read (agents' generate waits)
         self._ids = itertools.count(1)
 
     def submit(self, model, inputs):
@@ -63,6 +65,8 @@ class FakeScheduler:
     def job(self, job_id):
         if self.down:
             raise SchedulerError("down")
+        if self.auto_finish and self.jobs[job_id]["status"] == "queued":
+            self.finish(job_id, uploaded=False)
         return self.jobs[job_id]
 
     def finish(self, job_id, uploaded=True, seed=123):
@@ -109,3 +113,39 @@ def alice(world):
 @pytest.fixture
 def bob(world):
     return sign_in(world, "bob")
+
+
+class Mcp:
+    def __init__(self, http: TestClient, token: str):
+        self.http, self.token, self.n = http, token, 0
+
+    def rpc(self, method, params=None, token=None):
+        self.n += 1
+        return self.http.post("/mcp", json={"jsonrpc": "2.0", "id": self.n, "method": method, "params": params or {}},
+                              headers={"Authorization": f"Bearer {token or self.token}",
+                                       "Accept": "application/json, text/event-stream"})
+
+    def raw(self, tool, **args):
+        r = self.rpc("tools/call", {"name": tool, "arguments": args})
+        assert r.status_code == 200, r.text
+        return r.json()["result"]
+
+    def call(self, tool, **args):
+        res = self.raw(tool, **args)
+        if res.get("isError"):
+            raise AssertionError(res["content"][0]["text"])
+        if res.get("structuredContent") is not None:
+            sc = res["structuredContent"]
+            return sc.get("result", sc) if set(sc) == {"result"} else sc
+        return json.loads(res["content"][0]["text"])
+
+    def error(self, tool, **args) -> str:
+        res = self.raw(tool, **args)
+        assert res.get("isError"), res
+        return res["content"][0]["text"]
+
+
+def make_token(web: TestClient, name: str = "agent") -> str:
+    r = web.post("/api/tokens", json={"name": name}, headers=H)
+    assert r.status_code == 201, r.text
+    return r.json()["token"]

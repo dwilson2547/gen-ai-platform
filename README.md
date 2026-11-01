@@ -11,8 +11,8 @@ artifact it was tweaked from; artifacts are organised into public or private pro
 (default) and 9B, selectable per request. Built first for game sprites, but sprites are a preset, not
 the whole product. Served at genai.danwils.com (planned).
 
-Status: phase 1 done 2026-11-01 (both models live in gpu-scheduler on the 3080); phase 2a backend and 2b UI built;
-deploy (2c) next.
+Status: live at https://genai.danwils.com (0.1.0, 2026-11-01). 0.2.0 adds the MCP server (OAuth or personal tokens;
+connect from the Agents page).
 
 Dev: `cd ui && npm install && npm run build`, then `./start.sh` (SQLite, images in `.data/`, dev sign-in,
 http://localhost:8097) and `./kill.sh`. Real images locally: run sd-server on :8155 and start with
