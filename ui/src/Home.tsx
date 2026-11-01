@@ -19,6 +19,7 @@ export function Home() {
     if (!from || projects === null) return;
     api.artifact(from.id).then(a => setPrefill({
       prompt: a.prompt, preset: a.preset, model: a.model, width: a.width, height: a.height, steps: a.steps,
+      background: a.background,
       seed: from.keepSeed ? a.seed : null,
       project_id: projects.mine.some(p => p.id === a.project.id) ? a.project.id : null,
     })).catch(() => {});

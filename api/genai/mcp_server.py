@@ -24,10 +24,10 @@ from mcp.server.mcpserver.utilities.types import Image
 from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import __version__, access, auth, catalogue, generation, links, tokens
+from . import __version__, access, auth, catalogue, generation, links, sprites, tokens
 from .config import Settings
 from .db import Database
-from .models import Artifact, Project, User
+from .models import Artifact, Project, User, Variant
 from .scheduler import Scheduler
 from .storage import Store
 
@@ -35,8 +35,10 @@ INSTRUCTIONS = """\
 genai generates images (FLUX.2 klein, on a shared GPU) and keeps them in projects, with the prompt and settings that
 made each one. You act for the signed-in user who connected you, with their permissions.
 
-- generate makes images from a prompt. preset "sprite" wraps the prompt in a game-sprite template (pixel art, one
-  centred subject on a flat magenta background): give it just the subject, e.g. "a goblin archer". model
+- generate makes images from a prompt. Presets wrap the prompt in a game-sprite template (pixel art on a flat key-colour
+  background): "sprite" for characters (full body, side view), "item_sprite" for objects (loot, props). Give just the
+  subject, e.g. "a goblin archer", "a treasure map". background "magenta" (default) or "green": use green for pink,
+  magenta or purple subjects, magenta for green ones, so the clean-up doesn't eat the subject. model
   "flux2-klein-4b" is the default (fast, Apache-2.0); "flux2-klein-9b" is better at hard prompts but about twice as slow
   and under a NON-COMMERCIAL licence: its images may not be used in a commercial game. Say so if you pick it.
 - generate waits up to wait_seconds for the images; anything still pending comes back with its status. Check later with
@@ -48,6 +50,9 @@ made each one. You act for the signed-in user who connected you, with their perm
   To save the full-size file, fetch download_url (e.g. `curl -fo assets/mage.png "<download_url>"`): it needs no token
   and expires after 10 minutes (download_expires_at); call get_artifact again for a fresh one.
 - The same seed with the same prompt and settings reproduces an image (on the same GPU); vary the seed to explore.
+- Sprite presets get a transparent "cutout" version automatically (background removed, same canvas). make_sprite turns
+  an image into a pixel-grid sprite (e.g. 64 px, 24 colours; canvas "square" puts it on a size×size tile standing on the
+  bottom row, "fit" crops to it). Results list them under variants, each with its own download_url.
 - tweak makes new images from an existing one: reroll (new seed), edit_prompt (changed prompt, same seed) or
   edit_image (an instruction applied to the picture itself: "same character, holding an axe"). edit_image keeps a
   character consistent across variants and poses; generating from scratch does not.
@@ -108,6 +113,15 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                 raise ToolError(str(exc.detail)) from None
 
     def brief(a: Artifact, s: Session, link: bool = True) -> dict:
+        out = _brief(a, s, link)
+        vs = list(s.scalars(select(Variant).where(Variant.artifact_id == a.id).order_by(Variant.created_at)))
+        if vs:
+            out["variants"] = [{"id": v.id, "kind": v.kind, **v.params, "width": v.width, "height": v.height,
+                                **({"download_url": f"{out['download_url']}?variant={v.id}"} if "download_url" in out
+                                   else {})} for v in vs]
+        return out
+
+    def _brief(a: Artifact, s: Session, link: bool) -> dict:
         m = catalogue.MODELS.get(a.model)
         out = {"id": a.id, "status": a.status, "prompt": a.prompt, "preset": a.preset, "model": a.model,
                "project": {"id": a.project.id, "name": a.project.name, "visibility": a.project.visibility},
@@ -197,6 +211,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                  seed: Annotated[int | None, Field(ge=0, lt=2 ** 31)] = None,
                  count: Annotated[int, Field(ge=1, le=generation.MAX_COUNT)] = 1,
                  steps: Annotated[int | None, Field(ge=1, le=50)] = None,
+                 background: Literal["magenta", "green"] = "magenta",
                  wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
         """Generate `count` images of `prompt` into `project` (one of yours, by id or name; default: your Scratch
         project). preset "sprite" for game sprites (give just the subject). Waits up to wait_seconds for them; look at
@@ -205,7 +220,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
             p = find_project(s, user, project, write=True) if project else auth.ensure_default_project(s, user)
             arts = generation.create(s, scheduler, store, user, p, prompt=prompt, preset=preset, model=model,
                                      width=width, height=height, seed=seed, count=count, steps=steps,
-                                     max_pending=settings.max_pending_per_user)
+                                     background=background, max_pending=settings.max_pending_per_user)
             return [a.id for a in arts]
         return wait_for(run(ctx, submit), wait_seconds)
 
@@ -251,6 +266,26 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
         return wait_for(run(ctx, submit), wait_seconds)
 
     @server.tool()
+    def make_sprite(ctx: Context, artifact_id: str, size: Annotated[int, Field(ge=8, le=512)] = 64,
+                    colors: Annotated[int, Field(ge=0, le=256)] = 24,
+                    canvas: Literal["fit", "square"] = "fit") -> dict:
+        """A pixel-grid version of one of your images: background removed (sprite presets), cropped, shrunk to `size`
+        px (longest side for "fit"; a size×size tile with the subject standing on the bottom row for "square"), reduced
+        to `colors` colours (0 keeps all). Same settings again replaces the earlier one. Returns the image's variants
+        with download URLs."""
+        def go(s, user):
+            a = access.artifact_for_view(s, artifact_id, user)
+            if a.project.owner_id != user.id:
+                raise ToolError("only the project's owner can add versions; tweak (reroll) it into your own project "
+                                "first")
+            v = generation.make_pixel(a, store, sprites.PixelParams(size, colors, canvas), user)
+            s.flush()
+            out = brief(a, s)
+            out["made"] = v.id
+            return out
+        return run(ctx, go)
+
+    @server.tool()
     def get_artifact(ctx: Context, artifact_id: str) -> dict:
         """One image's status and recipe (prompt as given and as sent to the model, model, seed, size, steps), with
         its web page and, once done, a fresh download_url (no token needed, valid 10 minutes)."""
@@ -266,24 +301,38 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
         return run(ctx, go)
 
     @server.tool()
-    def get_image(ctx: Context, artifact_id: str, size: Literal["preview", "full"] = "preview") -> Image:
+    def get_image(ctx: Context, artifact_id: str, size: Literal["preview", "full"] = "preview",
+                  variant: str | None = None) -> Image:
         """The image itself, so you can look at it. preview: scaled to fit 512 px (cheap); full: the original PNG
-        (1024 px is ~1 MB). To save a file, fetch download_url from generate or get_artifact instead."""
+        (1024 px is ~1 MB). `variant`: one of its versions instead (a cutout or pixel sprite; pixel sprites are shown
+        enlarged to the preview size so you can see them). To save a file, fetch a download_url instead."""
         def go(s, user):
             a = access.artifact_for_view(s, artifact_id, user)
             if a.status != "done" or not a.image_key:
                 raise ToolError(f"no image yet: the artifact is {a.status}"
                                 + (f" ({a.error})" if a.error else ""))
+            key = a.image_key
+            if variant:
+                v = s.get(Variant, variant)
+                if v is None or v.artifact_id != a.id:
+                    raise ToolError("no such variant of this image (get_artifact lists them)")
+                key = v.image_key
             try:
-                data = b"".join(store.get(a.image_key))
+                data = b"".join(store.get(key))
             except KeyError:
                 raise ToolError("the image is missing from storage") from None
             if size == "preview":
                 from PIL import Image as PILImage
                 im = PILImage.open(io.BytesIO(data))
-                if max(im.size) > PREVIEW_SIDE:
+                if variant and max(im.size) < PREVIEW_SIDE // 2:          # a small pixel sprite: enlarge, crisp
+                    f = max(1, PREVIEW_SIDE // max(im.size))
+                    im = im.resize((im.width * f, im.height * f), PILImage.NEAREST)
+                    buf = io.BytesIO()
+                    im.save(buf, format="PNG")
+                    data = buf.getvalue()
+                elif max(im.size) > PREVIEW_SIDE:
                     im.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE),
-                                 PILImage.NEAREST if a.preset == "sprite" else PILImage.LANCZOS)
+                                 PILImage.NEAREST if a.preset in ("sprite", "item_sprite") else PILImage.LANCZOS)
                     buf = io.BytesIO()
                     im.save(buf, format="PNG")
                     data = buf.getvalue()

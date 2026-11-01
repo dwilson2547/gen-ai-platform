@@ -17,9 +17,10 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .catalogue import MODELS, PRESETS
+from . import sprites
+from .catalogue import BACKGROUNDS, MODELS, PRESETS, SPRITE_PRESETS, background_of
 from .db import Database
-from .models import Artifact, Project, User, utcnow
+from .models import Artifact, Project, User, Variant, utcnow
 from .scheduler import Scheduler, SchedulerError
 from .storage import Store
 
@@ -48,7 +49,8 @@ def pending_count(s: Session, user: User) -> int:
 def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: Project, *, prompt: str,
            preset: str, model: str, width: int, height: int, seed: int | None, count: int, steps: int | None,
            max_pending: int, parent: Artifact | None = None, op: str = "generate",
-           reference: Artifact | None = None) -> list[Artifact]:
+           reference: Artifact | None = None, background: str = "magenta",
+           full_prompt: str | None = None) -> list[Artifact]:
     """Queue `count` images of one prompt. Raises GenerateError; the caller's transaction then rolls back, so a
     refused submit leaves nothing behind. `parent`/`op` record a tweak's lineage; `reference` is an image the model
     edits from (FLUX.2 klein reference editing)."""
@@ -62,9 +64,11 @@ def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: 
     if queued + count > max_pending:
         raise GenerateError(f"You have {queued} image{'s' if queued != 1 else ''} in the queue and the limit is "
                             f"{max_pending}. Wait for some to finish.", 429)
+    if background not in BACKGROUNDS:
+        raise GenerateError(f"Unknown background {background!r}: {', '.join(BACKGROUNDS)}")
     if reference is not None and (reference.status != "done" or not reference.image_key):
         raise GenerateError("The image to edit from isn't finished")
-    full = PRESETS[preset].apply(prompt)
+    full = full_prompt or PRESETS[preset].apply(prompt, background)
     arts = []
     for i in range(count):
         a = Artifact(project_id=project.id, created_by=user.id, prompt=prompt.strip(), full_prompt=full,
@@ -119,6 +123,11 @@ def apply_job(a: Artifact, job: dict, store: Store) -> None:
         a.seconds, a.bytes = r.get("seconds"), r.get("bytes")
         a.ran_model, a.worker = job.get("ran_model") or a.model, job.get("worker")
         a.finished_at = _ts(job.get("finished_at"))
+        if a.preset in SPRITE_PRESETS:
+            try:
+                make_cutout(a, store)
+            except Exception:                                   # noqa: BLE001 — the image itself is still fine
+                log.exception("cutout for %s failed", a.id)
     elif status in ("failed", "cancelled"):
         a.status, a.error = "failed", (job.get("error") or status)[:2000]
         a.finished_at = _ts(job.get("finished_at"))
@@ -192,9 +201,57 @@ def tweak(s: Session, scheduler: Scheduler, store: Store, user: User, parent: Ar
     redo = source is not None and source.status == "done" and bool(source.image_key)
     if op == "reroll":
         return create(s, scheduler, store, user, target, prompt=parent.prompt, preset=parent.preset, seed=seed,
-                      reference=source if redo else None, **common)
+                      reference=source if redo else None, full_prompt=parent.full_prompt, **common)
     if op == "edit_prompt":
         return create(s, scheduler, store, user, target, prompt=prompt, preset=parent.preset,
-                      seed=parent.seed if seed is None else seed, reference=source if redo else None, **common)
+                      seed=parent.seed if seed is None else seed, reference=source if redo else None,
+                      background=background_of(parent.full_prompt), **common)
     return create(s, scheduler, store, user, target, prompt=prompt, preset="none", seed=seed, reference=parent,
                   **common)
+
+
+# --- variants (design §5) -------------------------------------------------------------------------------------------
+
+def _variant(a: Artifact, store: Store, kind: str, name: str, png: bytes, params: dict,
+             user_id: str | None) -> Variant:
+    key = f"artifacts/{a.id}/{name}.png"
+    store.put(key, png, "image/png")
+    w, h = sprites.size_of(png)
+    v = Variant(artifact_id=a.id, kind=kind, params=params, image_key=key, width=w, height=h, bytes=len(png),
+                created_by=user_id)
+    from sqlalchemy.orm import object_session
+    object_session(a).add(v)
+    return v
+
+
+def make_cutout(a: Artifact, store: Store) -> Variant:
+    """The background keyed out (sprites.cutout), same canvas. Made once per sprite, when it finishes."""
+    from sqlalchemy.orm import object_session
+    existing = object_session(a).scalar(select(Variant).where(Variant.artifact_id == a.id, Variant.kind == "cutout"))
+    if existing is not None:
+        return existing
+    png, key = sprites.cutout(b"".join(store.get(a.image_key)))
+    return _variant(a, store, "cutout", "cutout", png, {"key": "#%02x%02x%02x" % key}, None)
+
+
+def make_pixel(a: Artifact, store: Store, params: sprites.PixelParams, user: User) -> Variant:
+    """A pixel-grid version: from the cutout for sprites (made now if missing), else from the original image."""
+    if a.status != "done" or not a.image_key:
+        raise GenerateError("The image isn't finished")
+    if err := params.check():
+        raise GenerateError(err)
+    if a.preset in SPRITE_PRESETS:
+        source = b"".join(store.get(make_cutout(a, store).image_key))
+    else:
+        source = b"".join(store.get(a.image_key))
+    png = sprites.pixelate(source, params)
+    name = f"pixel-{params.size}-{params.colors}-{params.canvas}"
+    from sqlalchemy.orm import object_session
+    s = object_session(a)
+    old = s.scalar(select(Variant).where(Variant.artifact_id == a.id, Variant.kind == "pixel",
+                                         Variant.image_key == f"artifacts/{a.id}/{name}.png"))
+    if old is not None:                                          # same settings: replace, don't pile up copies
+        s.delete(old)
+        s.flush()
+    return _variant(a, store, "pixel", name, png,
+                    {"size": params.size, "colors": params.colors, "canvas": params.canvas}, user.id)

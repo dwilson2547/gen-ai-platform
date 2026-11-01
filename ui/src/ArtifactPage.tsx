@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, pending, type Artifact, type ArtifactFull } from "./api.ts";
 import { Grid } from "./Grid.tsx";
 import { TweakPanel } from "./Tweak.tsx";
+import { Versions } from "./Versions.tsx";
 import { Confirm } from "./Modal.tsx";
 import { Link, navigate } from "./router.tsx";
 import { dropFromLastList, neighbours, useApp } from "./state.tsx";
@@ -69,7 +70,7 @@ export function ArtifactPage({ id }: { id: string }) {
       <div className="apage-body">
         <div className={`viewer ${zoom ? "zoom" : ""}`}>
           {a.status === "done" && a.image_url
-            ? <img src={a.image_url} alt={a.prompt} className={a.preset === "sprite" || zoom ? "pixel" : ""}
+            ? <img src={a.image_url} alt={a.prompt} className={a.preset === "sprite" || a.preset === "item_sprite" || zoom ? "pixel" : ""}
                 onClick={() => setZoom(z => !z)} title={zoom ? "Fit" : "Actual pixels"} />
             : a.status === "failed"
               ? <div className="state"><strong>Generation failed</strong><span>{a.error}</span></div>
@@ -93,7 +94,7 @@ export function ArtifactPage({ id }: { id: string }) {
             {a.parent && <><dt>Made from</dt><dd><Link to={`/a/${a.parent.id}`} className="made-from">
               {a.parent.image_url && <img src={a.parent.image_url} alt="" className={a.parent.preset === "sprite" ? "pixel" : ""} />}
               <span>{opLabel(a.op)}</span></Link></dd></>}
-            <dt>Preset</dt><dd>{catalogue.presets.find(p => p.name === a.preset)?.label ?? a.preset}</dd>
+            <dt>Preset</dt><dd>{catalogue.presets.find(p => p.name === a.preset)?.label ?? a.preset}{a.background ? ` · ${a.background} background` : ""}</dd>
             <dt>Seed</dt><dd>{a.seed ?? "—"}</dd>
             <dt>Size</dt><dd>{a.width} × {a.height}</dd>
             <dt>Steps</dt><dd>{a.steps ?? "—"}</dd>
@@ -105,6 +106,7 @@ export function ArtifactPage({ id }: { id: string }) {
             <details><summary className="small">Full prompt sent to the model</summary><p className="small mono">{a.full_prompt}</p></details>)}
         </aside>
       </div>
+      <Versions a={a} onChange={vs => setA({ ...a, variants: vs })} />
       {kids.length > 0 && <>
         <h2 className="section">Made from this</h2>
         <Grid items={kids} loading={false} error={null} next={null} more={() => {}} retry={() => {}} empty="" />

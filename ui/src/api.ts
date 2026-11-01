@@ -22,8 +22,8 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export type Config = { oidc: boolean; dev_login: boolean; version: string };
 export type Me = { id: string; username: string; display_name: string | null };
 export type ModelInfo = { name: string; label: string; licence: string; commercial: boolean; note: string; default: boolean };
-export type PresetInfo = { name: string; label: string; hint: string; template: string; width: number; height: number };
-export type Catalogue = { models: ModelInfo[]; presets: PresetInfo[]; sizes: { width: number; height: number }[] };
+export type PresetInfo = { name: string; label: string; hint: string; template: string; width: number; height: number; sprite: boolean };
+export type Catalogue = { models: ModelInfo[]; presets: PresetInfo[]; sizes: { width: number; height: number }[]; backgrounds: string[] };
 export type Visibility = "private" | "public";
 export type Project = {
   id: string; name: string; description: string; visibility: Visibility; is_default: boolean; owner: string;
@@ -36,13 +36,17 @@ export type Artifact = {
   seed: number | null; width: number; height: number; steps: number | null; cfg_scale: number | null;
   parent_id: string | null; op: string; status: Status; error: string | null; ran_model: string | null;
   worker: string | null; seconds: number | null; bytes: number | null; finished_at: string | null;
-  image_url: string | null; title: string | null;
+  image_url: string | null; title: string | null; background: string | null;
 };
-export type ArtifactFull = Artifact & { parent: Artifact | null; children: Artifact[] };
+export type Variant = {
+  id: string; kind: "cutout" | "pixel"; params: Record<string, any>; width: number; height: number; bytes: number;
+  image_url: string; created_at: string;
+};
+export type ArtifactFull = Artifact & { parent: Artifact | null; children: Artifact[]; variants: Variant[]; can_edit: boolean };
 export type TweakOp = "reroll" | "edit_prompt" | "edit_image";
 export type GenerateIn = {
   prompt: string; project_id?: string; preset: string; model: string; width: number; height: number;
-  seed?: number; count: number; steps?: number;
+  seed?: number; count: number; steps?: number; background?: string;
 };
 
 const qs = (o: Record<string, string | number | undefined | null>) => {
@@ -71,6 +75,9 @@ export const api = {
   tweak: (id: string, b: { op: TweakOp; prompt?: string; count?: number; seed?: number }) =>
     call<{ artifacts: Artifact[] }>("POST", `/api/artifacts/${id}/tweak`, b),
   deleteArtifact: (id: string) => call<{ ok: boolean }>("DELETE", `/api/artifacts/${id}`),
+  makePixel: (id: string, b: { size: number; colors: number; canvas: string }) =>
+    call<Variant>("POST", `/api/artifacts/${id}/variants`, b),
+  deleteVariant: (id: string) => call<{ ok: boolean }>("DELETE", `/api/variants/${id}`),
 };
 
 export const pending = (a: Artifact) => a.status === "queued" || a.status === "running";

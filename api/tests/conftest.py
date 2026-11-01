@@ -69,11 +69,11 @@ class FakeScheduler:
             self.finish(job_id, uploaded=False)
         return self.jobs[job_id]
 
-    def finish(self, job_id, uploaded=True, seed=123):
+    def finish(self, job_id, uploaded=True, seed=123, png: str | None = None):
         r = {"seed": seed, "steps": 4, "cfg_scale": 1.0, "width": 1024, "height": 1024, "bytes": 100, "seconds": 2.9,
              "model": "x", "uploaded": uploaded}
         if not uploaded:
-            r["png_b64"] = png_b64()
+            r["png_b64"] = png or png_b64()
         self.jobs[job_id] = {"status": "done", "result": r, "ran_model": "flux2-klein-4b", "worker": "ainode",
                              "finished_at": "2026-11-01T12:00:00+00:00"}
 

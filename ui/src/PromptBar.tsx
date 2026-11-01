@@ -5,6 +5,7 @@ import { useApp } from "./state.tsx";
 
 export type Prefill = {
   prompt: string; preset: string; model: string; width: number; height: number; steps: number | null;
+  background: string | null;
   seed: number | null; project_id: string | null;
 };
 
@@ -16,6 +17,7 @@ export function PromptBar({ project, prefill, onQueued }: {
   const defModel = catalogue.models.find(m => m.default)?.name ?? catalogue.models[0].name;
   const [prompt, setPrompt] = useState("");
   const [preset, setPreset] = useState("none");
+  const [background, setBackground] = useState("magenta");
   const [model, setModel] = useState(defModel);
   const [projectId, setProjectId] = useState<string | null>(project?.id ?? null);
   const [more, setMore] = useState(false);
@@ -29,6 +31,7 @@ export function PromptBar({ project, prefill, onQueued }: {
   useEffect(() => {
     if (!prefill) return;
     setPrompt(prefill.prompt); setPreset(prefill.preset); setModel(prefill.model);
+    if (prefill.background) setBackground(prefill.background);
     setSize(`${prefill.width}x${prefill.height}`); setSteps(prefill.steps && prefill.steps !== 4 ? String(prefill.steps) : "");
     setSeed(prefill.seed !== null ? String(prefill.seed) : "");
     if (prefill.project_id && !project) setProjectId(prefill.project_id);
@@ -49,7 +52,7 @@ export function PromptBar({ project, prefill, onQueued }: {
     setBusy(true); setError(null);
     try {
       const r = await api.generate({
-        prompt, preset, model, width: w, height: h, count,
+        prompt, preset, model, width: w, height: h, count, background: p?.sprite ? background : undefined,
         project_id: project?.id ?? projectId ?? undefined,
         seed: seed === "" ? undefined : +seed, steps: steps === "" ? undefined : +steps,
       });
@@ -64,7 +67,7 @@ export function PromptBar({ project, prefill, onQueued }: {
     <form className="promptbar" onSubmit={e => { e.preventDefault(); submit(); }}>
       <div className="prow">
         <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={2} maxLength={4000}
-          placeholder={preset === "sprite" ? "a goblin archer" : "Describe the image…"} aria-label="prompt"
+          placeholder={preset === "sprite" ? "a goblin archer" : preset === "item_sprite" ? "a treasure map" : "Describe the image…"} aria-label="prompt"
           onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} />
         <button type="submit" className="primary big" disabled={busy || !prompt.trim() || !!seedErr || !!stepsErr}>
           {busy ? "Queuing…" : count > 1 ? `Generate ${count}` : "Generate"}
@@ -83,13 +86,21 @@ export function PromptBar({ project, prefill, onQueued }: {
               className={model === x.name ? "on" : ""} onClick={() => setModel(x.name)}>{x.label.replace("FLUX.2 klein ", "")}</button>
           ))}
         </div>
+        {p?.sprite && (
+          <div className="seg" role="radiogroup" aria-label="background" title="Key colour the clean-up removes: green for pink or purple subjects">
+            {catalogue.backgrounds.map(b => (
+              <button type="button" key={b} role="radio" aria-checked={background === b}
+                className={(background === b ? "on " : "") + "bg-" + b} onClick={() => setBackground(b)}>
+                <span className="swatch" />{b}</button>
+            ))}
+          </div>)}
         {!project && <ProjectPicker projects={mine} value={projectId} onChange={setProjectId} />}
         <button type="button" className="ghost" onClick={() => setMore(v => !v)} aria-expanded={more}>
           {more ? "Less ▴" : "More ▾"}</button>
       </div>
       {m && !m.commercial && (
         <p className="warn small">{m.label}: {m.licence}. Its images may not be used commercially.</p>)}
-      {p?.hint && <p className="muted small">{p.hint}</p>}
+      {p?.hint && <p className="muted small">{p.hint}{p.sprite && " Background is removed automatically; use green for pink or purple subjects."}</p>}
       {more && (
         <div className="prow more">
           <label>Size

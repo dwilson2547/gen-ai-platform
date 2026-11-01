@@ -19,10 +19,10 @@ from starlette.routing import Route
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import __version__, access, auth, catalogue, generation, links, mcp_server, oauth, oidc, storage, tokens
+from . import __version__, access, auth, catalogue, generation, links, mcp_server, oauth, oidc, sprites, storage, tokens
 from .config import Settings
 from .db import Database
-from .models import AccessToken, Artifact, OAuthGrant, Project, User
+from .models import AccessToken, Artifact, OAuthGrant, Project, User, Variant
 from .scheduler import HttpScheduler, LocalSdServer, Scheduler, Unconfigured
 
 log = logging.getLogger("genai")
@@ -84,6 +84,13 @@ class GenerateIn(BaseModel):
     seed: int | None = Field(default=None, ge=0, lt=2 ** 31)
     count: int = Field(default=1, ge=1, le=generation.MAX_COUNT)
     steps: int | None = Field(default=None, ge=1, le=50)
+    background: str = catalogue.DEFAULT_BACKGROUND
+
+
+class PixelIn(BaseModel):
+    size: int = Field(default=64, ge=8, le=512)
+    colors: int = Field(default=24, ge=0, le=256)
+    canvas: str = "fit"
 
 
 def iso(dt: datetime | None) -> str | None:
@@ -110,6 +117,11 @@ def project_out(p: Project, user: User, count: int = 0, cover: str | None = None
             "cover_url": f"/api/artifacts/{cover}/image" if cover else None}
 
 
+def variant_out(v: Variant) -> dict:
+    return {"id": v.id, "kind": v.kind, "params": v.params, "width": v.width, "height": v.height, "bytes": v.bytes,
+            "image_url": f"/api/variants/{v.id}/image", "created_at": iso(v.created_at)}
+
+
 def artifact_out(a: Artifact) -> dict:
     m = catalogue.MODELS.get(a.model)
     return {
@@ -122,6 +134,7 @@ def artifact_out(a: Artifact) -> dict:
         "ran_model": a.ran_model, "worker": a.worker, "seconds": a.seconds, "bytes": a.bytes,
         "finished_at": iso(a.finished_at),
         "image_url": f"/api/artifacts/{a.id}/image" if a.status == "done" else None,
+        "background": catalogue.background_of(a.full_prompt) if a.preset in catalogue.SPRITE_PRESETS else None,
     }
 
 
@@ -322,7 +335,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
                    else auth.ensure_default_project(s, user))
         arts = gen_error(generation.create, s, scheduler, store, user, project, prompt=body.prompt,
                          preset=body.preset, model=body.model, width=body.width, height=body.height,
-                         seed=body.seed, count=body.count, steps=body.steps,
+                         seed=body.seed, count=body.count, steps=body.steps, background=body.background,
                          max_pending=settings.max_pending_per_user)
         s.flush()
         for a in arts:
@@ -365,7 +378,9 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     @app.get("/api/artifacts/{artifact_id}")
     def get_artifact(artifact_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
         a = access.artifact_for_view(s, artifact_id, user)
-        return {**artifact_out(a), **lineage(s, a, user)}
+        vs = s.scalars(select(Variant).where(Variant.artifact_id == a.id).order_by(Variant.created_at))
+        return {**artifact_out(a), **lineage(s, a, user), "variants": [variant_out(v) for v in vs],
+                "can_edit": a.project.owner_id == user.id}
 
     def tweak_target(s: Session, user: User, parent: Artifact, project_id: str | None) -> Project:
         """Where a tweak goes: the project asked for (one of yours), else the parent's if it is yours, else Scratch."""
@@ -392,6 +407,11 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         a = access.artifact_for_view(s, artifact_id, user)
         if a.project.owner_id != user.id:
             raise HTTPException(403, "Only the project's owner can delete from it")
+        for v in s.scalars(select(Variant).where(Variant.artifact_id == a.id)):
+            try:
+                store.delete(v.image_key)
+            except Exception:  # noqa: BLE001
+                log.warning("could not delete %s from the store", v.image_key)
         if a.image_key:
             try:
                 store.delete(a.image_key)
@@ -424,17 +444,71 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         return StreamingResponse(body, media_type="image/png", headers=headers)
 
     @app.get(links.PATH + "{token}")
-    def download_link(token: str, s: Session = Depends(session)):
-        """A short-lived link handed to agents (links.py): the PNG, no other auth."""
+    def download_link(token: str, variant: str | None = None, s: Session = Depends(session)):
+        """A short-lived link handed to agents (links.py): the PNG, no other auth. `variant` picks one of the image's
+        versions (the link grants the image, so any of its versions)."""
         a = links.resolve(s, token)
         if a is None:
             raise HTTPException(404, "This download link is unknown or has expired; ask for a new one")
+        key, name = a.image_key, links.filename(a)
+        if variant:
+            v = s.get(Variant, variant)
+            if v is None or v.artifact_id != a.id:
+                raise HTTPException(404, "No such version of this image")
+            key, name = v.image_key, links.filename(a, v)
         try:
-            body = store.get(a.image_key)
+            body = store.get(key)
         except KeyError:
             raise HTTPException(404, "The image is missing from storage") from None
         return StreamingResponse(body, media_type="image/png", headers={
-            "Content-Disposition": f'attachment; filename="{links.filename(a)}"', "Cache-Control": "no-store"})
+            "Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+    # --- variants: cutouts and pixel-grid versions (sprites.py) -----------------------------------------------
+
+    @app.post("/api/artifacts/{artifact_id}/variants", status_code=201)
+    def make_variant(artifact_id: str, body: PixelIn, user: User = Depends(user_dep), s: Session = Depends(session)):
+        a = access.artifact_for_view(s, artifact_id, user)
+        if a.project.owner_id != user.id:
+            raise HTTPException(403, "Only the project's owner can add versions; re-roll it into your own project first")
+        v = gen_error(generation.make_pixel, a, store, sprites.PixelParams(body.size, body.colors, body.canvas), user)
+        s.flush()
+        return variant_out(v)
+
+    @app.get("/api/variants/{variant_id}/image")
+    def variant_image(variant_id: str, request: Request, download: bool = False, s: Session = Depends(session)):
+        raw = tokens.bearer(request.headers.get("authorization"))
+        if raw:
+            who = tokens.principal(s, raw)
+            if who is None:
+                raise HTTPException(401, "The token is missing, expired or revoked")
+            user = who.user
+        else:
+            user = auth.require_user(s, request, settings)
+        v = s.get(Variant, variant_id)
+        if v is None or not access.can_view(v.artifact.project, user):
+            raise HTTPException(404, "No such version")
+        try:
+            body = store.get(v.image_key)
+        except KeyError:
+            raise HTTPException(404, "The image is missing from storage") from None
+        headers = {"Cache-Control": "private, max-age=86400"}
+        if download:
+            headers["Content-Disposition"] = f'attachment; filename="{links.filename(v.artifact, v)}"'
+        return StreamingResponse(body, media_type="image/png", headers=headers)
+
+    @app.delete("/api/variants/{variant_id}")
+    def delete_variant(variant_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
+        v = s.get(Variant, variant_id)
+        if v is None or not access.can_view(v.artifact.project, user):
+            raise HTTPException(404, "No such version")
+        if v.artifact.project.owner_id != user.id:
+            raise HTTPException(403, "Only the project's owner can delete versions")
+        try:
+            store.delete(v.image_key)
+        except Exception:  # noqa: BLE001
+            log.warning("could not delete %s from the store", v.image_key)
+        s.delete(v)
+        return {"ok": True}
 
     # --- agents: personal access tokens and connected apps (cookie session only) ------------------------------
 

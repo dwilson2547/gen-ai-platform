@@ -175,7 +175,14 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
      "Made from" and "Made from this", filtered by visibility. A tweak goes into the given project, else the parent's
      if it is yours, else your Scratch. API `POST /api/artifacts/<id>/tweak`, MCP tool `tweak`. References reach
      gpu-scheduler as presigned GETs.
-   - 4b sprite post-processing variants and the preset fix.
+   - 4b ✅ (0.4.0, 2026-11-01, user's choices): presets "Character sprite" (`sprite`, unchanged name) and "Item sprite"
+     (`item_sprite`, no full-body/side-view); background magenta (default) or green, read back from the stored full
+     prompt (no new column); re-rolls reuse the exact stored full prompt. Sprites get a transparent `cutout` variant
+     automatically when they finish (keyed by hue near the corner-sampled key colour, so same-hue drop shadows go too);
+     `pixel` variants on demand (8–512 px, 0/2–256 colours, square tile standing on the bottom row or fit), owner only,
+     same settings replace. New table `variants`; download links reach variants with `?variant=`. MCP: `make_sprite`,
+     `generate(background=)`, `get_image(variant=)`, variants in results. A subject with the key's hue loses those
+     parts in the cutout (a pink X on a map, on magenta): that's what the green option is for.
 5. More presets.
 
 ## 10. Open questions ❓

@@ -63,10 +63,14 @@ export function Grid({ items, loading, error, next, more, retry, empty }: GridPr
 
 function Card({ a, onOpen }: { a: Artifact; onOpen: () => void }) {
   const since = useElapsed(a);
+  const [broken, setBroken] = useState(false);
   return (
     <button className={`card ${a.status}`} onClick={onOpen} title={a.prompt}>
-      {a.status === "done" && a.image_url
-        ? <img src={a.image_url} alt={a.prompt} loading="lazy" className={a.preset === "sprite" ? "pixel" : ""} />
+      {a.status === "done" && a.image_url && !broken
+        ? <img src={a.image_url} alt={a.prompt} loading="lazy" onError={() => setBroken(true)}
+            className={a.preset === "sprite" || a.preset === "item_sprite" ? "pixel" : ""} />
+        : a.status === "done"
+          ? <div className="state"><strong>Image missing</strong><span className="small">The file is gone from storage.</span></div>
         : a.status === "failed"
           ? <div className="state"><strong>Failed</strong><span className="small">{a.error}</span></div>
           : <div className="state"><div className="spinner" /><span>{a.status === "running" ? "Generating" : "Queued"} · {since}s</span></div>}

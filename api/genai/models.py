@@ -207,3 +207,22 @@ class DownloadLink(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"), index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Variant(Base):
+    """A file derived from an artifact's image (design §5): `cutout` (background keyed out, made automatically for
+    sprite presets) or `pixel` (shrunk to a pixel grid, on demand). `params` records how, so it can be redone."""
+    __tablename__ = "variants"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    params: Mapped[dict] = mapped_column(Json, default=dict)
+    image_key: Mapped[str] = mapped_column(String(200))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    bytes: Mapped[int] = mapped_column(Integer)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    artifact: Mapped[Artifact] = relationship()

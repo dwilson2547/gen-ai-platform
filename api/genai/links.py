@@ -45,6 +45,9 @@ def resolve(s: Session, raw: str) -> Artifact | None:
     return a if a is not None and a.status == "done" and a.image_key else None
 
 
-def filename(a: Artifact) -> str:
+def filename(a: Artifact, v=None) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", a.prompt.lower())[:40].strip("-") or "image"
-    return f"{slug}-{a.id[:8]}.png"
+    if v is None:
+        return f"{slug}-{a.id[:8]}.png"
+    suffix = "cutout" if v.kind == "cutout" else f"{v.width}x{v.height}"
+    return f"{slug}-{a.id[:8]}-{suffix}.png"
