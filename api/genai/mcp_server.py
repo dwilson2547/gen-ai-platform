@@ -24,7 +24,7 @@ from mcp.server.mcpserver.utilities.types import Image
 from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import __version__, access, auth, catalogue, generation, tokens
+from . import __version__, access, auth, catalogue, generation, links, tokens
 from .config import Settings
 from .db import Database
 from .models import Artifact, Project, User
@@ -45,7 +45,8 @@ made each one. You act for the signed-in user who connected you, with their perm
   given. list_projects shows them; create_project makes a new one (private unless the user asked otherwise).
   Others' public projects are readable but you can't add to them.
 - get_image returns the picture itself so you can look at it (preview: scaled to 512 px; full: the original PNG, large).
-  To save the full-size file, download download_url with the same bearer token you use here.
+  To save the full-size file, fetch download_url (e.g. `curl -fo assets/mage.png "<download_url>"`): it needs no token
+  and expires after 10 minutes (download_expires_at); call get_artifact again for a fresh one.
 - The same seed with the same prompt and settings reproduces an image (on the same GPU); vary the seed to explore.
 - list_artifacts finds earlier images by prompt text or project. Reuse what exists before generating near-duplicates.
 - Each user can have a limited number of images queued at once; if generate says the queue is full, wait for some to
@@ -103,7 +104,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
             except access.HTTPException as exc:          # access.py speaks HTTP; say the same thing to the agent
                 raise ToolError(str(exc.detail)) from None
 
-    def brief(a: Artifact) -> dict:
+    def brief(a: Artifact, s: Session, link: bool = True) -> dict:
         m = catalogue.MODELS.get(a.model)
         out = {"id": a.id, "status": a.status, "prompt": a.prompt, "preset": a.preset, "model": a.model,
                "project": {"id": a.project.id, "name": a.project.name, "visibility": a.project.visibility},
@@ -111,8 +112,9 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                "web_url": f"{base}/a/{a.id}"}
         if m and not m.commercial:
             out["licence"] = f"{m.licence}: not for commercial use"
-        if a.status == "done":
-            out["download_url"] = f"{base}/api/artifacts/{a.id}/image"
+        if a.status == "done" and link:
+            path, expires = links.create(s, a)
+            out["download_url"], out["download_expires_at"] = base + path, expires
         if a.status == "failed":
             out["error"] = a.error
         return out
@@ -208,7 +210,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                 arts = [s.get(Artifact, i) for i in ids]
                 if all(a.status not in generation.PENDING for a in arts) or time.monotonic() >= deadline:
                     pending = sum(a.status in generation.PENDING for a in arts)
-                    out = {"artifacts": [brief(a) for a in arts]}
+                    out = {"artifacts": [brief(a, s) for a in arts]}
                     if pending:
                         out["note"] = (f"{pending} still queued or generating; check with get_artifact in a "
                                        "little while.")
@@ -218,10 +220,10 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
     @server.tool()
     def get_artifact(ctx: Context, artifact_id: str) -> dict:
         """One image's status and recipe (prompt as given and as sent to the model, model, seed, size, steps), with
-        its web page and, once done, a download URL (send your bearer token)."""
+        its web page and, once done, a fresh download_url (no token needed, valid 10 minutes)."""
         def go(s, user):
             a = access.artifact_for_view(s, artifact_id, user)
-            return {**brief(a), "full_prompt": a.full_prompt, "steps": a.steps, "gpu_seconds": a.seconds,
+            return {**brief(a, s), "full_prompt": a.full_prompt, "steps": a.steps, "gpu_seconds": a.seconds,
                     "created_at": a.created_at.isoformat()}
         poller.poll_once()
         return run(ctx, go)
@@ -229,7 +231,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
     @server.tool()
     def get_image(ctx: Context, artifact_id: str, size: Literal["preview", "full"] = "preview") -> Image:
         """The image itself, so you can look at it. preview: scaled to fit 512 px (cheap); full: the original PNG
-        (1024 px is ~1 MB). To save a file, download download_url instead."""
+        (1024 px is ~1 MB). To save a file, fetch download_url from generate or get_artifact instead."""
         def go(s, user):
             a = access.artifact_for_view(s, artifact_id, user)
             if a.status != "done" or not a.image_key:
@@ -257,7 +259,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                        limit: Annotated[int, Field(ge=1, le=100)] = 20,
                        before: str | None = None) -> dict:
         """Images you can see, newest first: filtered by words in the prompt (`query`), a project (id or name), or
-        only ones you made. Page with `before` (the previous call's `next`)."""
+        only ones you made. Page with `before` (the previous call's `next`). get_artifact gives a download link."""
         def go(s, user):
             q = select(Artifact).join(Project, Artifact.project_id == Project.id).where(
                 access.visible_projects_clause(user))
@@ -278,7 +280,7 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
                 q = q.where(Artifact.created_at < cur)
             rows = list(s.scalars(q.order_by(Artifact.created_at.desc()).limit(limit)))
             from .main import iso
-            return {"artifacts": [brief(a) for a in rows],
+            return {"artifacts": [brief(a, s, link=False) for a in rows],
                     "next": iso(rows[-1].created_at) if len(rows) == limit else None}
         return run(ctx, go)
 

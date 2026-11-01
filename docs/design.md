@@ -125,7 +125,10 @@ their user with the web UI's visibility rules; no tool deletes anything or chang
 - `list_models_and_presets`, `list_projects`, `create_project(name, description, visibility)`
 - `generate(prompt, project?, preset?, model?, width?, height?, seed?, count?, steps?, wait_seconds=60)` → artifacts;
   waits (≤120 s) for them, returning anything still pending with its status. 9B results carry a non-commercial note.
-- `get_artifact(id)`: recipe, status, web page, and once done a `download_url` that accepts the same bearer token.
+- `get_artifact(id)`: recipe, status, web page, and once done a `download_url`: a link that needs no token and expires
+  after 10 minutes (0.2.1, `links.py`; random token stored hashed), so an OAuth-connected agent, whose token lives in
+  its client, can `curl` the PNG into a repo. `generate` returns one per finished image too. The bearer-token route
+  `/api/artifacts/<id>/image` still works for personal tokens.
 - `get_image(id, size=preview|full)`: the image as MCP image content (preview fits 512 px, nearest-neighbour for
   sprites) so the agent can look at it.
 - `list_artifacts(query?, project?, mine_only?, limit, before)`: prompt-text search over what the user can see.

@@ -37,7 +37,7 @@ def test_generate_waits_and_returns_done_images(agent):
     out = mcp.call("generate", prompt="a goblin archer", preset="sprite", count=2, seed=5)
     arts = out["artifacts"]
     assert [a["status"] for a in arts] == ["done", "done"] and "note" not in out
-    assert arts[0]["project"]["name"] == "Scratch" and arts[0]["download_url"].endswith(f"/api/artifacts/{arts[0]['id']}/image")
+    assert arts[0]["project"]["name"] == "Scratch" and "/dl/gnd_" in arts[0]["download_url"]
     got = mcp.call("get_artifact", artifact_id=arts[0]["id"])
     assert got["full_prompt"].startswith("pixel art game sprite of a goblin archer") and got["seed"] == 123
     # the web UI sees the agent's work
@@ -103,10 +103,38 @@ def test_list_artifacts_query_and_paging(agent):
     assert [a["prompt"] for a in mcp.call("list_artifacts", limit=2, before=page["next"])["artifacts"]] == ["red potion"]
 
 
+def test_download_link_needs_no_token_and_expires(world, agent):
+    mcp, web, http = agent
+    a = mcp.call("generate", prompt="a red potion")["artifacts"][0]
+    path = a["download_url"].replace("http://testserver", "")
+    assert path.startswith("/dl/gnd_") and a["download_expires_at"]
+    anon = TestClient(world[0])                                            # no cookie, no bearer
+    r = anon.get(path)
+    assert r.status_code == 200 and r.content.startswith(b"\x89PNG")
+    assert 'filename="a-red-potion-' in r.headers["content-disposition"]
+    assert anon.get("/dl/gnd_made-up").status_code == 404
+    # a fresh link from get_artifact; list_artifacts doesn't mint them
+    assert mcp.call("get_artifact", artifact_id=a["id"])["download_url"] != a["download_url"]
+    assert "download_url" not in mcp.call("list_artifacts")["artifacts"][0]
+    # expired
+    from datetime import timedelta
+    from genai import links
+    from genai.models import DownloadLink, utcnow
+    with world[0].state.db.session() as s:
+        for row in s.query(DownloadLink).all():
+            row.expires_at = utcnow() - timedelta(seconds=1)
+    assert anon.get(path).status_code == 404
+    # deleted image: link dies with it
+    fresh = mcp.call("get_artifact", artifact_id=a["id"])["download_url"].replace("http://testserver", "")
+    assert web.delete(f"/api/artifacts/{a['id']}", headers=H).status_code == 200
+    assert anon.get(fresh).status_code == 404
+    assert links.LINK_TTL == timedelta(minutes=10)
+
+
 def test_bearer_downloads_the_image_and_revoking_stops_it(agent):
     mcp, web, http = agent
     a = mcp.call("generate", prompt="a cat")["artifacts"][0]
-    r = http.get(a["download_url"].replace("http://testserver", ""), headers={"Authorization": f"Bearer {mcp.token}"})
+    r = http.get(f"/api/artifacts/{a['id']}/image", headers={"Authorization": f"Bearer {mcp.token}"})
     assert r.status_code == 200 and r.content.startswith(b"\x89PNG")
     tok = web.get("/api/agents").json()["tokens"][0]
     assert tok["name"] == "laptop" and tok["prefix"].startswith("gnp_")

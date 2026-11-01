@@ -197,3 +197,13 @@ class OAuthGrant(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped[User] = relationship()
+
+
+class DownloadLink(Base):
+    """A short-lived link to one image's full PNG that needs no other auth (links.py), so an agent can save the file
+    with curl even when its own token lives inside its MCP client. Only the SHA-256 of the token is stored."""
+    __tablename__ = "download_links"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

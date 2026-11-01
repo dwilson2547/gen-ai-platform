@@ -19,7 +19,7 @@ from starlette.routing import Route
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import __version__, access, auth, catalogue, generation, mcp_server, oauth, oidc, storage, tokens
+from . import __version__, access, auth, catalogue, generation, links, mcp_server, oauth, oidc, storage, tokens
 from .config import Settings
 from .db import Database
 from .models import AccessToken, Artifact, OAuthGrant, Project, User
@@ -380,9 +380,21 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
             raise HTTPException(404, "The image is missing from storage") from None
         headers = {"Cache-Control": "private, max-age=86400, immutable"}      # an artifact's image never changes
         if download:
-            slug = re.sub(r"[^a-z0-9]+", "-", a.prompt.lower())[:40].strip("-") or "image"
-            headers["Content-Disposition"] = f'attachment; filename="{slug}-{a.id[:8]}.png"'
+            headers["Content-Disposition"] = f'attachment; filename="{links.filename(a)}"'
         return StreamingResponse(body, media_type="image/png", headers=headers)
+
+    @app.get(links.PATH + "{token}")
+    def download_link(token: str, s: Session = Depends(session)):
+        """A short-lived link handed to agents (links.py): the PNG, no other auth."""
+        a = links.resolve(s, token)
+        if a is None:
+            raise HTTPException(404, "This download link is unknown or has expired; ask for a new one")
+        try:
+            body = store.get(a.image_key)
+        except KeyError:
+            raise HTTPException(404, "The image is missing from storage") from None
+        return StreamingResponse(body, media_type="image/png", headers={
+            "Content-Disposition": f'attachment; filename="{links.filename(a)}"', "Cache-Control": "no-store"})
 
     # --- agents: personal access tokens and connected apps (cookie session only) ------------------------------
 
