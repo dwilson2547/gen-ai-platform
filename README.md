@@ -11,7 +11,11 @@ artifact it was tweaked from; artifacts are organised into public or private pro
 (default) and 9B, selectable per request. Built first for game sprites, but sprites are a preset, not
 the whole product. Served at genai.danwils.com (planned).
 
-Status: phase 1 done 2026-11-01 — both models live in gpu-scheduler on the 3080; platform (phase 2) not started.
+Status: phase 1 done 2026-11-01 (both models live in gpu-scheduler on the 3080); phase 2a backend built, UI and
+deploy next.
+
+Dev: `./start.sh` (SQLite, images in `.data/`, dev sign-in, http://localhost:8097), `./kill.sh`; tests:
+`cd api && .venv/bin/pytest`.
 See [`docs/design.md`](docs/design.md).
 
 Prototype scripts (sd.cpp + sprite cleanup): `ai/model-test-scripts/flux2_klein/`.

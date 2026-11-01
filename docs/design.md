@@ -79,6 +79,26 @@ Objects live in an AIStor bucket (`gen-ai-platform`), metadata in Postgres.
 - Quality, same 6 prompts and seed (prototype): 9B honoured "no shadow" (4B drew one), gave the slime a
   face and shading, added the fox's tail; cleaner edges overall.
 
+### 4a. Qwen-Image 2512 (researched 2026-11-01, not tested) ❓
+
+From a research pass (model cards + the pinned sd.cpp checkout); nothing downloaded or run yet.
+- "Qwen Image Max" (`qwen-image-max-2025-12-30`) is an **API-only** Alibaba Model Studio product: no weights. The open
+  weights are **`Qwen/Qwen-Image-2512`** (~20B), model card `license: apache-2.0`. Quality relative to Max: unknown.
+  Trap: the newer `Qwen-Image-2.1` / `-Turbo` are under the Qwen Research License, not Apache.
+- sd.cpp at the pinned commit runs it (`docs/qwen_image.md`): diffusion GGUF + Qwen2.5-VL-7B text encoder (`--llm`) +
+  Qwen-Image VAE. Base settings are ~40 steps with CFG (minutes per image); a 4-step **Lightning LoRA**
+  (`lightx2v/Qwen-Image-2512-Lightning`, Apache-2.0) is what would make it usable — whether sd.cpp loads its keys is
+  ⚠ unverified.
+- 3080 fit, all ⚠ unverified estimates: Q4 file sets total 16–18 GB (over the scheduler pod's 16 Gi with offload);
+  the smallest viable set is `byteshape/Qwen-Image-2512-GGUF` Q3_K_S (7.8 GB) + Qwen2.5-VL-7B Q4_K_M (4.7 GB) + VAE
+  (0.25 GB) + Lightning LoRA (0.85 GB) ≈ 13.6 GB RAM. Speed guessed at 2–3× klein 9B with the LoRA.
+- Editing: `Qwen/Qwen-Image-Edit-2511` (Apache-2.0) is a separate checkpoint (a second model) needing the vision
+  projector (`--llm_vision`).
+- gpu-scheduler change: mostly a registry entry; LoRA support (`--lora-model-dir` + `lora` in the request) and an
+  optional vision file are small adapter additions.
+- Next step if wanted: download the ~13.6 GB set, test on the 5080 (LoRA loads? quality at Q3 for sprites? speed),
+  then decide.
+
 ## 5. Presets and post-processing 📐
 
 A preset = prompt template + default size/steps + post-processing chain. Generation stays general;
@@ -126,11 +146,15 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
 1. ✅ gpu-scheduler `flux2-klein-4b` and `flux2-klein-9b` adapters (sd-server, presigned upload), live and
    smoke-tested on the 3080 2026-11-01 (gpu-scheduler sha-5781dffbc4c0).
 2. Platform core: auth, splash, projects (public/private), generate, artifacts, storage, grid UI.
+   - 2a ✅ backend (2026-11-01): `api/genai/` — authentik OIDC gated on `USER_GROUP`, sessions, projects, generate
+     (one gpu-scheduler job per image, presigned PUT into the bucket), a poller folding job results into artifacts,
+     an auth-checked image proxy; 17 tests. Schema by `create_all` until there's prod data to keep.
+   - 2b UI (React/Vite, webdoc's stack): splash, prompt + grid, projects, artifact page.
+   - 2c deploy: image, chart, CI, authentik provider + group, bucket, DB, gpu-scheduler client token.
 3. MCP server with OAuth.
 4. Tweaks and lineage; `sprite` preset and post-processing variants.
 5. More presets.
 
 ## 10. Open questions ❓
 
-- None blocking phase 2. Later: Qwen-Image (the user's "Qwen Image Max 2512") as a third model — sd.cpp has
-  Qwen-Image recipes, so it would be another `sdcpp` adapter entry (tabled 2026-11-01).
+- None blocking phase 2. Later: Qwen-Image as a third, Apache-2.0 model (§4a).
