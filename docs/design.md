@@ -152,7 +152,10 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
    - 2b ✅ UI (2026-11-01, `ui/`, React/Vite as webdoc): splash, prompt bar over a live grid, projects, project
      page, image page; six workflows verified in a browser against a local sd-server (`.ui_dev_state.md`). Dev-only
      `DEV_SD_SERVER` runs jobs on a local sd-server instead of gpu-scheduler.
-   - 2c deploy: image, chart, CI, authentik provider + group, bucket, DB, gpu-scheduler client token.
+   - 2c deploy (2026-11-01): image (Dockerfile, CI publishes `dwilson2547/gen-ai-platform`), chart
+     `helm/gen-ai-platform` (Argo app `gen-ai-platform` in cluster-config), authentik blueprint bound to
+     `gen-ai-platform-users`, `scripts/create-secrets.sh` for the database, gpu-scheduler token, bucket keys and OIDC
+     secret. Image checked locally: read-only root, non-root, against Postgres 17.
 3. MCP server with OAuth.
 4. Tweaks and lineage; `sprite` preset and post-processing variants.
 5. More presets.

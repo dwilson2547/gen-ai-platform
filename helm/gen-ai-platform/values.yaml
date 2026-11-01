@@ -1,0 +1,50 @@
+image:
+  repository: dwilson2547/gen-ai-platform
+  # A release (api/genai/__init__.py). Bumping this is how a release reaches the cluster; :latest is pushed too, but
+  # the chart doesn't follow it.
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# Public (Traefik pubsecure, letsencrypt-prod, external-dns), but every page past the splash needs a session, and only
+# members of oidc.userGroup can get one.
+ingress:
+  host: genai.danwils.com
+  tlsSecretName: genai-danwils-tls
+
+# Hand-applied (scripts/create-secrets.sh); key DATABASE_URL (cluster Postgres).
+databaseSecret: gen-ai-platform-db
+
+oidc:
+  issuer: https://auth.danwils.com/application/o/gen-ai-platform/
+  clientId: gen-ai-platform
+  secretName: gen-ai-platform-oidc   # key client_secret
+  # Only members may sign in (checked by the app at every sign-in; authentik also binds the application to it).
+  userGroup: gen-ai-platform-users
+  # Same LAN route to authentik as webdoc: the pod has no IPv6 route and auth.danwils.com resolves to Cloudflare IPv6
+  # only.
+  hostAliases:
+    - ip: 192.168.0.65
+      hostnames:
+        - auth.danwils.com
+
+# Images in AIStor. gpu-scheduler uploads each one to a presigned PUT on this endpoint, so it must be reachable from
+# the GPU node as well. Keys S3_ACCESS_KEY / S3_SECRET_KEY in the hand-applied Secret.
+images:
+  s3Endpoint: http://192.168.0.10:30320
+  bucket: gen-ai-platform
+  secretName: gen-ai-platform-bucket
+
+# gpu-scheduler: client token "gen-ai-platform" in the hand-applied Secret, key SCHEDULER_TOKEN.
+scheduler:
+  url: http://gpu-scheduler-api.gpu-scheduler.svc
+  secretName: gen-ai-platform-gpu-scheduler
+  maxPendingPerUser: 16
+
+# One replica: the job poller runs in-process.
+resources:
+  requests:
+    cpu: 50m
+    memory: 160Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
