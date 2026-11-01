@@ -185,8 +185,9 @@ def tweak(s: Session, scheduler: Scheduler, store: Store, user: User, parent: Ar
     """New artifacts made from `parent` (design §1), linked to it:
     - reroll: the same recipe with a new seed (random unless given), to explore.
     - edit_prompt: a changed prompt with the parent's seed (unless given), so the difference is the prompt's.
-    - edit_image: an instruction ("same character, holding an axe") applied to the parent's image itself; the preset's
-      template is not applied, since the instruction is about the picture, not a subject.
+    - edit_image: an instruction ("same character, holding an axe") applied to the parent's image itself. It keeps the
+      parent's preset (so sprites stay sprites for clean-up) but the template is not applied: the instruction is about
+      the picture, not a subject.
     Re-rolling or re-wording an image that is itself an edit redoes that edit from the same source image.
     `target` is the project they go into (one of the user's own); the caller decides it."""
     if op not in ("reroll", "edit_prompt", "edit_image"):
@@ -205,9 +206,12 @@ def tweak(s: Session, scheduler: Scheduler, store: Store, user: User, parent: Ar
     if op == "edit_prompt":
         return create(s, scheduler, store, user, target, prompt=prompt, preset=parent.preset,
                       seed=parent.seed if seed is None else seed, reference=source if redo else None,
-                      background=background_of(parent.full_prompt), **common)
-    return create(s, scheduler, store, user, target, prompt=prompt, preset="none", seed=seed, reference=parent,
-                  **common)
+                      background=background_of(parent.full_prompt) or "magenta",
+                      full_prompt=prompt.strip() if redo else None, **common)
+    # An edit keeps its source's preset, so a sprite's edit is still cleaned up as a sprite (cutout, pixel versions),
+    # but the model gets only the instruction: the template describes a subject, an edit describes a change.
+    return create(s, scheduler, store, user, target, prompt=prompt, preset=parent.preset, seed=seed, reference=parent,
+                  full_prompt=prompt.strip(), **common)
 
 
 # --- variants (design §5) -------------------------------------------------------------------------------------------

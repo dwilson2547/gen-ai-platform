@@ -72,6 +72,11 @@ def public() -> dict:
     }
 
 
-def background_of(full_prompt: str) -> str:
-    """Which key colour an artifact was generated on, read back from its full prompt (no column needed)."""
-    return "green" if "(#00ff00)" in full_prompt else "magenta"
+def background_of(full_prompt: str) -> str | None:
+    """Which key colour an artifact was generated on, read back from its full prompt (no column needed). None for an
+    edit, whose full prompt is just the instruction (its background is its source's)."""
+    if "(#00ff00)" in full_prompt:
+        return "green"
+    if "(#ff00ff)" in full_prompt:
+        return "magenta"
+    return None

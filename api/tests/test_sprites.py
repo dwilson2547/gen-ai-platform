@@ -115,3 +115,19 @@ def test_mcp_make_sprite_and_variant_downloads(world):
         assert Image.open(io.BytesIO(base64.b64decode(img["data"]))).size == (512, 512)   # enlarged 16x to the preview size
         bob = Mcp(http, make_token(sign_in(world, "bob")))
         assert "No such artifact" in bob.error("make_sprite", artifact_id=a["id"])
+
+
+def test_an_edit_of_a_sprite_is_cleaned_up_as_a_sprite(world, alice):
+    app, _, sched, _ = world
+    a = finished(world, alice, background="green")
+    e = alice.post(f"/api/artifacts/{a['id']}/tweak", json={"op": "edit_image", "prompt": "same goblin, waving"},
+                   headers=H).json()["artifacts"][0]
+    assert sched.submitted[-1][1][0]["prompt"] == "same goblin, waving"           # only the instruction
+    assert e["preset"] == "sprite" and e["background"] is None
+    sched.finish(f"job-{len(sched.submitted)}", uploaded=False, png=base64.b64encode(scene()).decode())
+    app.state.poller.poll_once()
+    assert [v["kind"] for v in alice.get(f"/api/artifacts/{e['id']}").json()["variants"]] == ["cutout"]
+    # re-wording the edit redoes it from the same source, again with only the instruction
+    alice.post(f"/api/artifacts/{e['id']}/tweak", json={"op": "edit_prompt", "prompt": "same goblin, jumping"}, headers=H)
+    item = sched.submitted[-1][1][0]
+    assert item["prompt"] == "same goblin, jumping" and item["ref_images"]

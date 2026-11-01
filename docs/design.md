@@ -170,7 +170,7 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
 3. ✅ MCP server with OAuth (0.2.0).
 4. Tweaks and lineage; `sprite` preset and post-processing variants.
    - 4a ✅ (0.3.0, 2026-11-01) tweaks: `reroll` (same recipe, new seed), `edit_prompt` (new prompt, parent's seed),
-     `edit_image` (instruction + the parent's image as a FLUX.2 reference, no preset template). Re-rolling or re-wording
+     `edit_image` (instruction + the parent's image as a FLUX.2 reference, no preset template; keeps the parent's preset for clean-up since 0.4.1). Re-rolling or re-wording
      an edit redoes it from the same source image. Results link to their parent (`parent_id`, `op`); the image page shows
      "Made from" and "Made from this", filtered by visibility. A tweak goes into the given project, else the parent's
      if it is yours, else your Scratch. API `POST /api/artifacts/<id>/tweak`, MCP tool `tweak`. References reach

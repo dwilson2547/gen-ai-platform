@@ -42,7 +42,7 @@ def test_edit_image_sends_the_image_as_reference(world, alice):
     a = done(world, alice)
     k = tweak(alice, a, op="edit_image", prompt="same dwarf, holding an axe").json()["artifacts"][0]
     _, inputs = sched.submitted[-1]
-    assert inputs[0]["prompt"] == "same dwarf, holding an axe" and k["preset"] == "none"     # no template on edits
+    assert inputs[0]["prompt"] == "same dwarf, holding an axe" and k["preset"] == "sprite"   # no template, still a sprite
     assert inputs[0]["ref_images"] == [{"image_url": f"http://s3.test/b/artifacts/{a['id']}/original.png?sig=get"}]
 
 
