@@ -204,6 +204,56 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
      parts in the cutout (a pink X on a map, on magenta): that's what the green option is for.
 5. More presets.
 
+## 11. Character sheets (proposal 2026-11-02; user's choices in) 📐
+
+**Why.** The workflow the user wants: roll until a character is right, then get that character in poses, with
+expressions, with different weapon sets. It works today as one "Edit image" per variation (tested 2026-11-02 on a
+Qwen goblin archer with FLUX 4B: identity, outfit and pixel style held across "running", "laughing", "sword and
+shield"; weak spots were hands/props, the subject redrawn bigger than the base, and that every variant is a separate
+click). A sheet makes it one flow and keeps the results together and exportable at one scale.
+
+**Decided 2026-11-02 (user):** 4 candidates per step; select to **freeze**, re-roll the unfrozen ones, decide at the end
+which to **keep** (one or more per variation); export scaled by the **base's** factor; export = **individual PNGs**
+(zip; no sprite-sheet image or manifest for now); no animation frames.
+
+**What a sheet is.** A named character inside one of the creator's projects (same visibility as the project), made in
+two stages, both with the same 4-candidate freeze/re-roll mechanic:
+1. **Base:** from a description (character sprite preset, any model) or from an existing image. 4 candidates; freeze the
+   ones you like, re-roll the rest until happy, then pick one as the base.
+2. **Variations:** each line ("running", "laughing", "sword and shield") is an `edit_image` of the base itself (never of
+   another variation, so style can't drift along a chain), 4 candidates each with the same freeze/re-roll, and at the
+   end keep any number per variation.
+Candidates are ordinary artifacts (generate or `op=edit_image, parent_id=base`), so lineage, cutouts and pixel
+versions work as now. Unkept candidates stay in the project like any other image (deletable as today).
+
+**Data (new tables only; no column changes, §3 schema rule).**
+- `sheets`: id, project_id, name, created_by, created_at, base_artifact_id (null until chosen), model, pixel settings
+  (size, colours).
+- `sheet_slots`: id, sheet_id, position, kind (`base` | `variation`), label, instruction.
+- `sheet_candidates`: slot_id, artifact_id, frozen, kept, created_at.
+
+**Flow.**
+1. "New character" (Projects/home) or "Make character sheet" (image page, skips stage 1 with that image as the base):
+   name, description, model (FLUX 4B default; 9B with the licence warning; Qwen for the base only, as it can't edit).
+2. Stage 1 grid of 4; click to freeze (pinned outline); "Re-roll the rest" replaces the unfrozen ones; "Use as base".
+3. Stage 2: add variations (one per line, or starter groups: Poses idle/walk/run/jump/attack/hurt; Expressions
+   happy/angry/surprised/sad; weapons typed). Each gets a row of 4. The edit instruction is wrapped as "same character,
+   same pixel art style, same size and framing, plain {bg} background: {line}" (aimed at the scale drift).
+   Per row: freeze, re-roll the rest, reword; add or remove rows any time.
+4. Keep: tick the candidates to keep (any number per row). Export: zip of the kept ones' cutouts and pixel sprites,
+   named `<label>_<n>.png`, pixel settings shared across the sheet.
+5. The queue limit (16 per user) is respected by the sheet queueing the rest as earlier jobs finish (a sheet of 10
+   variations is 40 images, ~2–3 min on the 3080 with 4B), not by refusing.
+
+**Scale.** Per-sprite "fit" makes a crouch as tall as a jump. The export scales every kept image by the **base's**
+factor (base subject height → tile), standing on the bottom row; one taller than the tile is shrunk to fit and flagged.
+
+**MCP.** `create_sheet(name, description | base_artifact, model)`, `get_sheet`, `freeze`, `reroll_unfrozen(slot)`,
+`set_base`, `add_variations`, `keep`, `export_sheet` (download URL of the zip).
+
+**Not in scope.** Animation frames (walk cycles need frame-to-frame consistency that edits don't give); multi-character
+scenes; Qwen-Image-Edit (§4a; only if FLUX consistency isn't enough on real sheets).
+
 ## 10. Open questions ❓
 
 - None blocking phase 2. Later: Qwen-Image as a third, Apache-2.0 model (§4a).
