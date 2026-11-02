@@ -20,10 +20,10 @@ MODELS: dict[str, Model] = {m.name: m for m in [
     Model("flux2-klein-4b", "FLUX.2 klein 4B", "Apache-2.0", True, "Fast. ~3 s per image."),
     Model("flux2-klein-9b", "FLUX.2 klein 9B", "FLUX Non-Commercial License", False,
           "Better at hard prompts, ~2x slower. Its images may not be used commercially."),
-    # Measured on a 5080 (design §4a): ~8 s per 512² image warm, ~22 s at 1024². Sprites end at 64 px, so 512².
+    # On the 3080 (design §4a): ~4 s per 512² image warm, ~12 s at 1024². Sprites end at 64 px, so 512².
     Model("qwen-image-2512", "Qwen-Image 2512", "Apache-2.0", True,
-          "Cleaner pixel art, several times slower than 4B (sprites default to 512²). Can't edit images: edits of "
-          "its pictures are made with FLUX.2 klein 4B.", edits=False, sprite_size=512),
+          "Cleaner pixel art. ~4 s per sprite (512²), ~12 s at 1024². Can't edit images: edits of its pictures are "
+          "made with FLUX.2 klein 4B.", edits=False, sprite_size=512),
 ]}
 DEFAULT_MODEL = "flux2-klein-4b"
 

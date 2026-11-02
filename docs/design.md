@@ -105,8 +105,10 @@ sprite presets on it are 512² (`Model.sprite_size`); width/height are optional 
   Peak VRAM above the idle desktop: ~10.4 GB (Q3), ~11.2 GB (Q4, sd-cli), so it fits a 12 GB card; the
   `--max-vram 11` cap cost no speed. RAM for the weights 12.7 GB (sd.cpp's own count, Q3), inside the scheduler pod's
   16 Gi limit with ⚠ unmeasured headroom. Compare klein 4B ~2 s warm on the same card.
-- 3080: ⚠ unmeasured. Scaling by klein 4B's 3080/5080 ratio (2.9 s vs ~2 s) gives an estimate of ~12 s at 512² and
-  ~30 s at 1024².
+- 3080, measured in prod 2026-11-02 (gpu-scheduler sha-b02c77291f2c): warm 512² 4.1–4.9 s, 1024² 11.3–12.1 s; first
+  image after a load 30.0 s; 10,275 MiB peak VRAM; scheduler pod ~14.8 GB unreclaimable memory (limit raised to 20 Gi).
+  Faster than the 5080 numbers above: those ran under WSL on a GPU shared with the Windows desktop. The first prod job
+  failed on a LoRA path (gpu-scheduler docs/issues/2026_11_02_qwen_lora_path.md), fixed the same night.
 - Quality (sprite prompts, seed 42/7): clean pixel art, flat key colour; Q3 and Q4 near-identical; draws objects for
   item prompts (a treasure map, where klein's sprite preset drew a person); 512² good enough for sprites (they end at
   64 px). Misses: "translucent" ignored (slime), one 1024² knight with two swords, the green item background tinted
