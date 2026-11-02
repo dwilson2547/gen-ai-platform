@@ -79,25 +79,37 @@ Objects live in an AIStor bucket (`gen-ai-platform`), metadata in Postgres.
 - Quality, same 6 prompts and seed (prototype): 9B honoured "no shadow" (4B drew one), gave the slime a
   face and shading, added the fox's tail; cleaner edges overall.
 
-### 4a. Qwen-Image 2512 (researched 2026-11-01, not tested) ❓
+### 4a. Qwen-Image 2512 (tested on the 5080 2026-11-01) 🧪
 
-From a research pass (model cards + the pinned sd.cpp checkout); nothing downloaded or run yet.
 - "Qwen Image Max" (`qwen-image-max-2025-12-30`) is an **API-only** Alibaba Model Studio product: no weights. The open
   weights are **`Qwen/Qwen-Image-2512`** (~20B), model card `license: apache-2.0`. Quality relative to Max: unknown.
   Trap: the newer `Qwen-Image-2.1` / `-Turbo` are under the Qwen Research License, not Apache.
-- sd.cpp at the pinned commit runs it (`docs/qwen_image.md`): diffusion GGUF + Qwen2.5-VL-7B text encoder (`--llm`) +
-  Qwen-Image VAE. Base settings are ~40 steps with CFG (minutes per image); a 4-step **Lightning LoRA**
-  (`lightx2v/Qwen-Image-2512-Lightning`, Apache-2.0) is what would make it usable — whether sd.cpp loads its keys is
-  ⚠ unverified.
-- 3080 fit, all ⚠ unverified estimates: Q4 file sets total 16–18 GB (over the scheduler pod's 16 Gi with offload);
-  the smallest viable set is `byteshape/Qwen-Image-2512-GGUF` Q3_K_S (7.8 GB) + Qwen2.5-VL-7B Q4_K_M (4.7 GB) + VAE
-  (0.25 GB) + Lightning LoRA (0.85 GB) ≈ 13.6 GB RAM. Speed guessed at 2–3× klein 9B with the LoRA.
+- Files (in `~/models/qwen-image/`): `byteshape/Qwen-Image-2512-GGUF` Q3_K_M (8.8 GB) or Q4_K_S (10.2 GB),
+  Qwen2.5-VL-7B-Instruct Q4_K_M (`--llm`, 4.7 GB), `Comfy-Org/Qwen-Image_ComfyUI` VAE (0.25 GB), 4-step Lightning LoRA
+  `lightx2v/Qwen-Image-2512-Lightning` bf16 (0.85 GB, Apache-2.0). Scripts: `ai/model-test-scripts/qwen_image/`.
+- sd.cpp at the pinned commit (df0fa26) runs it with the LoRA: 2160/2160 LoRA tensors applied, 4 steps at cfg 1.0,
+  euler, flow-shift 3. sd-server ignores `<lora:…>` in prompts: the request needs `"lora": [{"path": "<file>",
+  "multiplier": 1}]` with `--lora-model-dir`. `--lora-apply-mode immediately` aborts on the quantized model (runtime
+  mode works).
+- Measured on the 5080, `--offload-to-cpu --max-vram 11 --vae-tiling --diffusion-fa`, warm sd-server, Q3 + LoRA:
+  | size | per image (HTTP round trip) | of which sampling / VAE decode |
+  |---|---|---|
+  | 512² | 8.0–9.8 s | 4.6 s / 0.5 s |
+  | 768² | 11.5–13.6 s | ⚠ not split out |
+  | 1024² | 21.8–22.9 s | 18.0 s / 3.5 s |
+  Peak VRAM above the idle desktop: ~10.4 GB (Q3), ~11.2 GB (Q4, sd-cli), so it fits a 12 GB card; the
+  `--max-vram 11` cap cost no speed. RAM for the weights 12.7 GB (sd.cpp's own count, Q3), inside the scheduler pod's
+  16 Gi limit with ⚠ unmeasured headroom. Compare klein 4B ~2 s warm on the same card.
+- 3080: ⚠ unmeasured. Scaling by klein 4B's 3080/5080 ratio (2.9 s vs ~2 s) gives an estimate of ~12 s at 512² and
+  ~30 s at 1024².
+- Quality (sprite prompts, seed 42/7): clean pixel art, flat key colour; Q3 and Q4 near-identical; draws objects for
+  item prompts (a treasure map, where klein's sprite preset drew a person); 512² good enough for sprites (they end at
+  64 px). Misses: "translucent" ignored (slime), one 1024² knight with two swords, the green item background tinted
+  the map's land green (the key-colour caveat of §5).
 - Editing: `Qwen/Qwen-Image-Edit-2511` (Apache-2.0) is a separate checkpoint (a second model) needing the vision
-  projector (`--llm_vision`).
-- gpu-scheduler change: mostly a registry entry; LoRA support (`--lora-model-dir` + `lora` in the request) and an
-  optional vision file are small adapter additions.
-- Next step if wanted: download the ~13.6 GB set, test on the 5080 (LoRA loads? quality at Q3 for sprites? speed),
-  then decide.
+  projector (`--llm_vision`); not tested.
+- gpu-scheduler change if adopted: registry entry with `--lora-model-dir`, `--offload-to-cpu`, `--vae-tiling`, flow
+  shift; adapter sends the `lora` field. Platform: a third model in the catalogue, default size 512² for sprite presets.
 
 ## 5. Presets and post-processing 📐
 
