@@ -24,10 +24,10 @@ from mcp.server.mcpserver.utilities.types import Image
 from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import __version__, access, auth, catalogue, generation, links, sprites, tokens
+from . import __version__, access, auth, catalogue, generation, links, sheets, sprites, tokens
 from .config import Settings
 from .db import Database
-from .models import Artifact, Project, User, Variant
+from .models import Artifact, Project, Sheet, SheetCandidate, SheetSlot, User, Variant
 from .scheduler import Scheduler
 from .storage import Store
 
@@ -58,6 +58,11 @@ made each one. You act for the signed-in user who connected you, with their perm
 - tweak makes new images from an existing one: reroll (new seed), edit_prompt (changed prompt, same seed) or
   edit_image (an instruction applied to the picture itself: "same character, holding an axe"). edit_image keeps a
   character consistent across variants and poses; generating from scratch does not.
+- Character sheets: one character in poses, expressions and weapon sets, kept consistent. create_sheet from a
+  description makes 4 base candidates; look at them (get_image), freeze the good ones (sheet_mark), sheet_reroll the
+  rest, sheet_set_base, then sheet_add_variations (each row: 4 edits of the base), sheet_mark keep, export_sheet (zip
+  of cutouts + pixel sprites at the base's scale). Ask the user which candidates they like rather than choosing for
+  them when they are around.
 - list_artifacts finds earlier images by prompt text or project. Reuse what exists before generating near-duplicates.
 - Each user can have a limited number of images queued at once; if generate says the queue is full, wait for some to
   finish rather than retrying in a loop.
@@ -371,6 +376,163 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
             from .main import iso
             return {"artifacts": [brief(a, s, link=False) for a in rows],
                     "next": iso(rows[-1].created_at) if len(rows) == limit else None}
+        return run(ctx, go)
+
+    # --- character sheets (design §11, sheets.py) ---------------------------------------------------------------
+
+    def sheet_view(s: Session, user: User, sheet_id: str, write: bool) -> Sheet:
+        sh = s.get(Sheet, sheet_id)
+        if sh is None or not access.can_view(sh.project, user):
+            raise ToolError(f"no character sheet {sheet_id!r} you can see")
+        if write and sh.project.owner_id != user.id:
+            raise ToolError("only the project's owner can change its character sheets")
+        return sh
+
+    def sheet_brief(s: Session, sh: Sheet) -> dict:
+        rows = []
+        for slot in sheets.slots(s, sh):
+            cands = []
+            for c in sheets.candidates(s, slot):
+                one = {"candidate_id": c.id, "frozen": c.frozen, "kept": c.kept}
+                if c.held:
+                    one["status"] = "waiting for room in your queue"
+                elif c.artifact is None:
+                    one["status"] = "deleted"
+                else:
+                    one.update(_brief(c.artifact, s, link=False))
+                cands.append(one)
+            rows.append({"row_id": slot.id, "kind": slot.kind, "label": slot.label, "candidates": cands})
+        return {"sheet_id": sh.id, "name": sh.name, "project": sh.project.name, "model": sh.model,
+                "variations_model": sheets.edit_model(sh), "base_artifact_id": sh.base_artifact_id,
+                "pixel_size": sh.pixel_size, "pixel_colors": sh.pixel_colors, "rows": rows,
+                "web_url": f"{base}/s/{sh.id}"}
+
+    def sheet_wait(sheet_id: str, wait_seconds: int, ctx: Context) -> dict:
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            poller.poll_once()
+            def look(s, user):
+                sh = sheet_view(s, user, sheet_id, write=False)
+                busy = any(c.held or (c.artifact is not None and c.artifact.status in generation.PENDING)
+                           for slot in sheets.slots(s, sh) for c in sheets.candidates(s, slot))
+                return busy, sheet_brief(s, sh)
+            busy, out = run(ctx, look)
+            if not busy or time.monotonic() >= deadline:
+                if busy:
+                    out["note"] = "some images are still being made; call get_sheet again in a little while"
+                return out
+            time.sleep(1.0)
+
+    @server.tool()
+    def create_sheet(ctx: Context, name: Annotated[str, Field(min_length=1, max_length=100)],
+                     description: Annotated[str | None, Field(max_length=4000)] = None,
+                     base_artifact_id: str | None = None, project: str | None = None,
+                     model: str = catalogue.DEFAULT_MODEL, background: Literal["magenta", "green"] = "magenta",
+                     wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
+        """Start a character sheet: one character in poses, expressions, weapon sets. From a `description` ("a goblin
+        archer") it makes 4 base candidates (character sprite preset, `model`); or from `base_artifact_id`, an image
+        that becomes the base. Then: sheet_mark to freeze the ones you like, sheet_reroll to replace the rest,
+        sheet_set_base to pick the base, sheet_add_variations, sheet_mark keep, export_sheet. Variations are edits,
+        so a Qwen base gets FLUX variations."""
+        def go(s, user):
+            b = access.artifact_for_view(s, base_artifact_id, user) if base_artifact_id else None
+            if project:
+                target = find_project(s, user, project, write=True)
+            elif b is not None and b.project.owner_id == user.id:
+                target = b.project
+            else:
+                target = auth.ensure_default_project(s, user)
+            return sheets.new_sheet(s, scheduler, store, user, target, name=name, description=description, base=b,
+                                    model=model, background=background,
+                                    max_pending=settings.max_pending_per_user).id
+        return sheet_wait(run(ctx, go), wait_seconds, ctx)
+
+    @server.tool()
+    def get_sheet(ctx: Context, sheet_id: str) -> dict:
+        """A character sheet's rows (the base, then each variation) and their candidate images: status, frozen,
+        kept. Look at a candidate with get_image."""
+        return run(ctx, lambda s, user: sheet_brief(s, sheet_view(s, user, sheet_id, write=False)))
+
+    @server.tool()
+    def sheet_mark(ctx: Context, sheet_id: str, freeze: list[str] | None = None, unfreeze: list[str] | None = None,
+                   keep: list[str] | None = None, unkeep: list[str] | None = None) -> dict:
+        """Mark candidates (candidate_id values from get_sheet): freeze = keep it through re-rolls; keep = include it
+        in the export (finished images only; any number per row)."""
+        def go(s, user):
+            sh = sheet_view(s, user, sheet_id, write=True)
+            mine = {c.id: c for slot in sheets.slots(s, sh) for c in sheets.candidates(s, slot)}
+            for ids, field, value in ((freeze, "frozen", True), (unfreeze, "frozen", False), (keep, "kept", True),
+                                      (unkeep, "kept", False)):
+                for cid in ids or []:
+                    c = mine.get(cid)
+                    if c is None:
+                        raise ToolError(f"{cid!r} isn't a candidate on this sheet")
+                    if field == "kept" and value and (c.artifact is None or c.artifact.status != "done"):
+                        raise ToolError(f"{cid!r} isn't finished, so it can't be kept yet")
+                    setattr(c, field, value)
+            s.flush()
+            return sheet_brief(s, sh)
+        return run(ctx, go)
+
+    @server.tool()
+    def sheet_reroll(ctx: Context, sheet_id: str, row_id: str,
+                     instruction: Annotated[str | None, Field(max_length=1000)] = None,
+                     wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
+        """New images for a row's unfrozen candidates; `instruction` rewords the row first (the base's description, or
+        the variation, e.g. "holding a short sword and a round shield")."""
+        def go(s, user):
+            sh = sheet_view(s, user, sheet_id, write=True)
+            slot = s.get(SheetSlot, row_id)
+            if slot is None or slot.sheet_id != sh.id:
+                raise ToolError(f"{row_id!r} isn't a row of this sheet")
+            sheets.reroll(s, scheduler, store, user, sh, slot, settings.max_pending_per_user, instruction)
+        run(ctx, go)
+        return sheet_wait(sheet_id, wait_seconds, ctx)
+
+    @server.tool()
+    def sheet_set_base(ctx: Context, sheet_id: str, candidate_id: str) -> dict:
+        """Pick the base from the base row's finished candidates. Variations are edits of it, so it can't change once
+        there are variations."""
+        def go(s, user):
+            sh = sheet_view(s, user, sheet_id, write=True)
+            c = s.get(SheetCandidate, candidate_id)
+            if c is None:
+                raise ToolError(f"{candidate_id!r} isn't a candidate on this sheet")
+            sheets.set_base(s, sh, c)
+            s.flush()
+            return sheet_brief(s, sh)
+        return run(ctx, go)
+
+    @server.tool()
+    def sheet_add_variations(ctx: Context, sheet_id: str,
+                             variations: Annotated[list[str], Field(min_length=1, max_length=sheets.MAX_SLOTS)],
+                             wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
+        """Add rows of variations, one per item: poses ("running", "crouching"), expressions ("laughing"), weapon sets
+        ("holding a war hammer"). Each gets 4 candidates, each an edit of the base. Rows beyond your queue limit wait
+        and go out as earlier images finish."""
+        def go(s, user):
+            sh = sheet_view(s, user, sheet_id, write=True)
+            sheets.add_variations(s, scheduler, store, user, sh, variations, settings.max_pending_per_user)
+        run(ctx, go)
+        return sheet_wait(sheet_id, wait_seconds, ctx)
+
+    @server.tool()
+    def export_sheet(ctx: Context, sheet_id: str, pixel_size: Annotated[int | None, Field(ge=8, le=512)] = None,
+                     pixel_colors: Annotated[int | None, Field(ge=0, le=256)] = None) -> dict:
+        """Zip the kept images: each one's transparent cutout and a pixel sprite on a pixel_size² tile (standing on
+        the bottom row), all at the base's scale so sizes compare. Returns download_url (no token needed, 10 minutes)
+        and `shrunk`: sprites that were too big for the tile at that scale and were fitted instead."""
+        def go(s, user):
+            sh = sheet_view(s, user, sheet_id, write=pixel_size is not None or pixel_colors is not None)
+            if pixel_size is not None:
+                sh.pixel_size = pixel_size
+            if pixel_colors is not None:
+                if pixel_colors == 1:
+                    raise ToolError("pixel_colors must be 0 (all) or 2-256")
+                sh.pixel_colors = pixel_colors
+            _key, files, shrunk = sheets.export(s, sh, store)
+            path, expires = sheets.link(s, sh)
+            return {"download_url": base + path, "download_expires_at": expires, "files": files, "shrunk": shrunk}
         return run(ctx, go)
 
     host = settings.public_url.split("://", 1)[-1].split("/", 1)[0]

@@ -75,11 +75,27 @@ def cutout(png: bytes) -> tuple[bytes, tuple[int, int, int]]:
 
 def pixelate(cut_png: bytes, p: PixelParams) -> bytes:
     """A pixel-grid sprite from a cutout: cropped to the subject, BOX-downscaled, palette-reduced, hard alpha."""
+    return pixelate_at(cut_png, p)[0]
+
+
+def subject_scale(cut_png: bytes, size: int) -> float:
+    """The factor that fits this cutout's subject to `size` px on its longest side: a character sheet applies the
+    base's factor to every variation, so their sizes stay comparable (design §11)."""
+    im = Image.open(io.BytesIO(cut_png)).convert("RGBA")
+    bbox = im.getchannel("A").getbbox() or (0, 0, im.width, im.height)
+    return size / max(bbox[2] - bbox[0], bbox[3] - bbox[1])
+
+
+def pixelate_at(cut_png: bytes, p: PixelParams, scale: float | None = None) -> tuple[bytes, bool]:
+    """As pixelate; `scale` (output px per source px) instead of fitting this subject to p.size. Returns (PNG, shrunk):
+    shrunk when the scaled subject was bigger than the tile and had to be fitted after all."""
     im = Image.open(io.BytesIO(cut_png)).convert("RGBA")
     if bbox := im.getchannel("A").getbbox():
         im = im.crop(bbox)
-    scale = p.size / max(im.size)
-    small = im.resize((max(1, round(im.width * scale)), max(1, round(im.height * scale))), Image.BOX)
+    fit = p.size / max(im.size)
+    shrunk = scale is not None and scale > fit
+    k = fit if scale is None or shrunk else scale
+    small = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))), Image.BOX)
     alpha = small.getchannel("A").point(lambda a: 255 if a >= ALPHA_CUTOFF else 0)
     rgb = small.convert("RGB")
     if p.colors:
@@ -92,7 +108,7 @@ def pixelate(cut_png: bytes, p: PixelParams) -> bytes:
         sprite = canvas
     buf = io.BytesIO()
     sprite.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
+    return buf.getvalue(), shrunk
 
 
 def size_of(png: bytes) -> tuple[int, int]:

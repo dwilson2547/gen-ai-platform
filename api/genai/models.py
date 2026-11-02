@@ -226,3 +226,68 @@ class Variant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     artifact: Mapped[Artifact] = relationship()
+
+
+# --- character sheets (design §11) ------------------------------------------------------------------------------------
+
+class Sheet(Base):
+    """A named character: a base image and variations of it, in one of its creator's projects (whose visibility it
+    shares). The base is picked from candidates of `description` (or given); variations are edits of the base."""
+    __tablename__ = "sheets"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(60))                 # the base's; variations need a model that edits
+    background: Mapped[str] = mapped_column(String(10), default="magenta")
+    base_artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id", ondelete="SET NULL"),
+                                                         nullable=True)
+    pixel_size: Mapped[int] = mapped_column(Integer, default=64)
+    pixel_colors: Mapped[int] = mapped_column(Integer, default=24)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    project: Mapped[Project] = relationship()
+    creator: Mapped[User] = relationship()
+    base: Mapped[Artifact | None] = relationship()
+
+
+class SheetSlot(Base):
+    """One row of a sheet: the base (kind "base", from the description) or a variation (an edit instruction)."""
+    __tablename__ = "sheet_slots"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    sheet_id: Mapped[str] = mapped_column(ForeignKey("sheets.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(10))
+    label: Mapped[str] = mapped_column(String(100))
+    instruction: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SheetCandidate(Base):
+    """One of a slot's images. `held`: not submitted yet because the user's queue was full; the poller submits it when
+    there is room. An artifact deleted from the project leaves the candidate empty (artifact_id null, not held)."""
+    __tablename__ = "sheet_candidates"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    slot_id: Mapped[str] = mapped_column(ForeignKey("sheet_slots.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)
+    artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True)
+    held: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    frozen: Mapped[bool] = mapped_column(Boolean, default=False)
+    kept: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    slot: Mapped[SheetSlot] = relationship()
+    artifact: Mapped[Artifact | None] = relationship()
+
+
+class SheetLink(Base):
+    """A short-lived link to a sheet's latest export zip (as DownloadLink is for one image)."""
+    __tablename__ = "sheet_links"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sheet_id: Mapped[str] = mapped_column(ForeignKey("sheets.id", ondelete="CASCADE"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

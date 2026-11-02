@@ -148,8 +148,9 @@ def _ts(v) -> datetime:
 
 
 class Poller:
-    def __init__(self, db: Database, scheduler: Scheduler, store: Store, interval: float):
+    def __init__(self, db: Database, scheduler: Scheduler, store: Store, interval: float, max_pending: int = 16):
         self.db, self.scheduler, self.store, self.interval = db, scheduler, store, interval
+        self.max_pending = max_pending
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -167,7 +168,14 @@ class Poller:
                     break                                       # scheduler down: try again next round
                 except Exception:                               # noqa: BLE001 — one bad artifact must not stop the rest
                     log.exception("poll %s failed", a.id)
-            return sum(1 for a in pending if a.status in PENDING)
+            still = sum(1 for a in pending if a.status in PENDING)
+        with self.db.session() as s:                            # character sheets' held images, as queues free up
+            from . import sheets
+            try:
+                sheets.fill_held(s, self.scheduler, self.store, self.max_pending)
+            except Exception:                                   # noqa: BLE001
+                log.exception("filling held sheet images failed")
+        return still
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="genai-poller", daemon=True)

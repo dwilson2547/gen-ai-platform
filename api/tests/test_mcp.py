@@ -29,7 +29,8 @@ def test_tools_listed(agent):
     mcp, _, _ = agent
     names = {t["name"] for t in mcp.rpc("tools/list").json()["result"]["tools"]}
     assert names == {"list_models_and_presets", "list_projects", "create_project", "generate", "get_artifact",
-                     "get_image", "list_artifacts", "tweak", "make_sprite"}
+                     "get_image", "list_artifacts", "tweak", "make_sprite", "create_sheet", "get_sheet", "sheet_mark",
+                     "sheet_reroll", "sheet_set_base", "sheet_add_variations", "export_sheet"}
 
 
 def test_generate_waits_and_returns_done_images(agent):

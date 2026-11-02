@@ -19,10 +19,10 @@ from starlette.routing import Route
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import __version__, access, auth, catalogue, generation, links, mcp_server, oauth, oidc, sprites, storage, tokens
+from . import __version__, access, auth, catalogue, generation, links, mcp_server, oauth, oidc, sheets, sprites, storage, tokens
 from .config import Settings
 from .db import Database
-from .models import AccessToken, Artifact, OAuthGrant, Project, User, Variant
+from .models import AccessToken, Artifact, OAuthGrant, Project, Sheet, SheetCandidate, SheetSlot, User, Variant
 from .scheduler import HttpScheduler, LocalSdServer, Scheduler, Unconfigured
 
 log = logging.getLogger("genai")
@@ -138,6 +138,64 @@ def artifact_out(a: Artifact) -> dict:
     }
 
 
+class SheetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=4000)
+    base_artifact_id: str | None = None
+    project_id: str | None = None
+    model: str = catalogue.DEFAULT_MODEL
+    background: str = catalogue.DEFAULT_BACKGROUND
+
+
+class SheetPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    pixel_size: int | None = Field(default=None, ge=8, le=512)
+    pixel_colors: int | None = Field(default=None, ge=0, le=256)
+
+
+class LinesIn(BaseModel):
+    lines: list[str] = Field(min_length=1, max_length=sheets.MAX_SLOTS)
+
+
+class RerollIn(BaseModel):
+    instruction: str | None = Field(default=None, max_length=1000)
+
+
+class CandidatePatch(BaseModel):
+    frozen: bool | None = None
+    kept: bool | None = None
+
+
+class BaseIn(BaseModel):
+    candidate_id: str
+
+
+def sheet_brief(sh: Sheet, user: User, kept: int = 0) -> dict:
+    m = catalogue.MODELS.get(sh.model)
+    return {"id": sh.id, "name": sh.name, "description": sh.description, "model": sh.model,
+            "model_label": m.label if m else sh.model, "edit_model": sheets.edit_model(sh),
+            "background": sh.background, "by": sh.creator.username, "created_at": iso(sh.created_at),
+            "project": {"id": sh.project.id, "name": sh.project.name, "visibility": sh.project.visibility},
+            "base_artifact_id": sh.base_artifact_id,
+            "cover_url": f"/api/artifacts/{sh.base_artifact_id}/image" if sh.base_artifact_id else None,
+            "pixel_size": sh.pixel_size, "pixel_colors": sh.pixel_colors, "kept": kept,
+            "can_edit": sh.project.owner_id == user.id}
+
+
+def sheet_out(s: Session, sh: Sheet, user: User) -> dict:
+    out = []
+    kept = 0
+    for slot in sheets.slots(s, sh):
+        cands = []
+        for c in sheets.candidates(s, slot):
+            kept += c.kept
+            cands.append({"id": c.id, "position": c.position, "frozen": c.frozen, "kept": c.kept, "held": c.held,
+                          "artifact": artifact_out(c.artifact) if c.artifact is not None else None})
+        out.append({"id": slot.id, "kind": slot.kind, "label": slot.label, "instruction": slot.instruction,
+                    "position": slot.position, "candidates": cands})
+    return {**sheet_brief(sh, user, kept), "slots": out}
+
+
 def create_app(settings: Settings | None = None, provider: oidc.Provider | None = None,
                store: storage.Store | None = None, scheduler: Scheduler | None = None) -> FastAPI:
     """`store` / `scheduler` override what the settings name (tests pass fakes)."""
@@ -156,7 +214,7 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
             scheduler = LocalSdServer(settings.dev_sd_server)
         else:
             scheduler = Unconfigured()
-    poller = generation.Poller(db, scheduler, store, settings.poll_seconds)
+    poller = generation.Poller(db, scheduler, store, settings.poll_seconds, settings.max_pending_per_user)
     mcp, mcp_app = mcp_server.build(db, settings, scheduler, store, poller)
 
     @contextlib.asynccontextmanager
@@ -447,6 +505,16 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
     def download_link(token: str, variant: str | None = None, s: Session = Depends(session)):
         """A short-lived link handed to agents (links.py): the PNG, no other auth. `variant` picks one of the image's
         versions (the link grants the image, so any of its versions)."""
+        if token.startswith(sheets.LINK_PREFIX):
+            sh = sheets.resolve_link(s, token)
+            if sh is None:
+                raise HTTPException(404, "This download link is unknown or has expired; export again")
+            try:
+                body = store.get(f"sheets/{sh.id}/export.zip")
+            except KeyError:
+                raise HTTPException(404, "The export is missing; export again") from None
+            return StreamingResponse(body, media_type="application/zip", headers={
+                "Content-Disposition": f'attachment; filename="{sheets.zip_name(sh)}"', "Cache-Control": "no-store"})
         a = links.resolve(s, token)
         if a is None:
             raise HTTPException(404, "This download link is unknown or has expired; ask for a new one")
@@ -511,6 +579,132 @@ def create_app(settings: Settings | None = None, provider: oidc.Provider | None 
         return {"ok": True}
 
     # --- agents: personal access tokens and connected apps (cookie session only) ------------------------------
+
+    # --- character sheets (design §11, sheets.py) ---------------------------------------------------------------
+
+    def sheet_for_view(s: Session, sheet_id: str, user: User) -> Sheet:
+        sh = s.get(Sheet, sheet_id)
+        if sh is None or not access.can_view(sh.project, user):
+            raise HTTPException(404, "No such character sheet")
+        return sh
+
+    def sheet_for_write(s: Session, sheet_id: str, user: User) -> Sheet:
+        sh = sheet_for_view(s, sheet_id, user)
+        if sh.project.owner_id != user.id:
+            raise HTTPException(403, "Only the project's owner can change its character sheets")
+        return sh
+
+    def slot_of(s: Session, sh: Sheet, slot_id: str) -> SheetSlot:
+        slot = s.get(SheetSlot, slot_id)
+        if slot is None or slot.sheet_id != sh.id:
+            raise HTTPException(404, "No such row on this sheet")
+        return slot
+
+    def sheet_reply(s: Session, sh: Sheet, user: User) -> dict:
+        s.flush()
+        s.expire_all()
+        return sheet_out(s, s.get(Sheet, sh.id), user)
+
+    @app.get("/api/sheets")
+    def list_sheets(project_id: str | None = None, user: User = Depends(user_dep), s: Session = Depends(session)):
+        q = select(Sheet).join(Project, Sheet.project_id == Project.id).where(access.visible_projects_clause(user))
+        if project_id:
+            q = q.where(Sheet.project_id == access.project_for_view(s, project_id, user).id)
+        else:
+            q = q.where(Sheet.created_by == user.id)
+        rows = list(s.scalars(q.order_by(Sheet.created_at.desc()).limit(200)))
+        kept = sheets.counts(s, [r.id for r in rows])
+        return {"sheets": [sheet_brief(r, user, kept.get(r.id, 0)) for r in rows]}
+
+    @app.post("/api/sheets", status_code=201)
+    def create_sheet(body: SheetIn, user: User = Depends(user_dep), s: Session = Depends(session)):
+        base = access.artifact_for_view(s, body.base_artifact_id, user) if body.base_artifact_id else None
+        if body.project_id:
+            project = access.project_for_write(s, body.project_id, user)
+        elif base is not None and base.project.owner_id == user.id:
+            project = base.project
+        else:
+            project = auth.ensure_default_project(s, user)
+        sh = gen_error(sheets.new_sheet, s, scheduler, store, user, project, name=body.name,
+                       description=body.description, base=base, model=body.model, background=body.background,
+                       max_pending=settings.max_pending_per_user)
+        return sheet_reply(s, sh, user)
+
+    @app.get("/api/sheets/{sheet_id}")
+    def get_sheet(sheet_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
+        return sheet_out(s, sheet_for_view(s, sheet_id, user), user)
+
+    @app.patch("/api/sheets/{sheet_id}")
+    def update_sheet(sheet_id: str, body: SheetPatch, user: User = Depends(user_dep), s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        if body.name is not None:
+            sh.name = body.name.strip()
+        if body.pixel_size is not None:
+            sh.pixel_size = body.pixel_size
+        if body.pixel_colors is not None:
+            if body.pixel_colors == 1:
+                raise HTTPException(422, "Colours must be 0 (all) or 2–256")
+            sh.pixel_colors = body.pixel_colors
+        return sheet_reply(s, sh, user)
+
+    @app.delete("/api/sheets/{sheet_id}")
+    def delete_sheet(sheet_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
+        """The sheet goes; its images stay in the project."""
+        s.delete(sheet_for_write(s, sheet_id, user))
+        return {"ok": True}
+
+    @app.post("/api/sheets/{sheet_id}/base")
+    def set_sheet_base(sheet_id: str, body: BaseIn, user: User = Depends(user_dep), s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        c = s.get(SheetCandidate, body.candidate_id)
+        if c is None:
+            raise HTTPException(404, "No such image on this sheet")
+        gen_error(sheets.set_base, s, sh, c)
+        return sheet_reply(s, sh, user)
+
+    @app.post("/api/sheets/{sheet_id}/slots", status_code=201)
+    def add_sheet_slots(sheet_id: str, body: LinesIn, user: User = Depends(user_dep), s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        gen_error(sheets.add_variations, s, scheduler, store, user, sh, body.lines, settings.max_pending_per_user)
+        return sheet_reply(s, sh, user)
+
+    @app.post("/api/sheets/{sheet_id}/slots/{slot_id}/reroll", status_code=202)
+    def reroll_sheet_slot(sheet_id: str, slot_id: str, body: RerollIn, user: User = Depends(user_dep),
+                          s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        gen_error(sheets.reroll, s, scheduler, store, user, sh, slot_of(s, sh, slot_id),
+                  settings.max_pending_per_user, body.instruction)
+        return sheet_reply(s, sh, user)
+
+    @app.delete("/api/sheets/{sheet_id}/slots/{slot_id}")
+    def remove_sheet_slot(sheet_id: str, slot_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        gen_error(sheets.remove_slot, s, slot_of(s, sh, slot_id))
+        return sheet_reply(s, sh, user)
+
+    @app.patch("/api/sheets/{sheet_id}/candidates/{candidate_id}")
+    def mark_sheet_candidate(sheet_id: str, candidate_id: str, body: CandidatePatch, user: User = Depends(user_dep),
+                             s: Session = Depends(session)):
+        sh = sheet_for_write(s, sheet_id, user)
+        c = s.get(SheetCandidate, candidate_id)
+        if c is None or slot_of(s, sh, c.slot_id) is None:
+            raise HTTPException(404, "No such image on this sheet")
+        if body.kept and (c.artifact is None or c.artifact.status != "done"):
+            raise HTTPException(422, "Only finished images can be kept")
+        if body.frozen is not None:
+            c.frozen = body.frozen
+        if body.kept is not None:
+            c.kept = body.kept
+        return sheet_reply(s, sh, user)
+
+    @app.post("/api/sheets/{sheet_id}/export")
+    def export_sheet(sheet_id: str, user: User = Depends(user_dep), s: Session = Depends(session)):
+        """Builds the zip of the kept images and returns a short-lived link to it, with the sprites that had to be
+        shrunk to fit the tile (bigger than the base's scale allows)."""
+        sh = sheet_for_view(s, sheet_id, user)
+        key, files, shrunk = gen_error(sheets.export, s, sh, store)
+        path, expires = sheets.link(s, sh)
+        return {"download_url": path, "expires_at": expires, "files": files, "shrunk": shrunk}
 
     @app.get("/api/agents")
     def agents(user: User = Depends(user_dep), s: Session = Depends(session)):
