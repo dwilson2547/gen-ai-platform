@@ -21,7 +21,7 @@ export function PromptBar({ project, prefill, onQueued }: {
   const [model, setModel] = useState(defModel);
   const [projectId, setProjectId] = useState<string | null>(project?.id ?? null);
   const [more, setMore] = useState(false);
-  const [size, setSize] = useState("1024x1024");
+  const [size, setSize] = useState("");          // "" = the model's and preset's default (Qwen sprites: 512²)
   const [seed, setSeed] = useState("");
   const [count, setCount] = useState(1);
   const [steps, setSteps] = useState("");
@@ -45,10 +45,11 @@ export function PromptBar({ project, prefill, onQueued }: {
   const seedErr = seed !== "" && !/^\d{1,10}$/.test(seed) ? "Seed is a whole number" : null;
   const stepsErr = steps !== "" && !(/^\d+$/.test(steps) && +steps >= 1 && +steps <= 50) ? "Steps: 1–50" : null;
   const sizes = useMemo(() => catalogue.sizes.map(s => `${s.width}x${s.height}`), [catalogue]);
+  const autoSize = m?.sprite_size && p?.sprite ? `${m.sprite_size}x${m.sprite_size}` : `${p?.width ?? 1024}x${p?.height ?? 1024}`;
 
   const submit = async () => {
     if (!prompt.trim() || seedErr || stepsErr || busy) return;
-    const [w, h] = size.split("x").map(Number);
+    const [w, h] = size ? size.split("x").map(Number) : [undefined, undefined];
     setBusy(true); setError(null);
     try {
       const r = await api.generate({
@@ -100,11 +101,13 @@ export function PromptBar({ project, prefill, onQueued }: {
       </div>
       {m && !m.commercial && (
         <p className="warn small">{m.label}: {m.licence}. Its images may not be used commercially.</p>)}
+      {m && !m.edits && <p className="muted small">{m.label}: {m.note}</p>}
       {p?.hint && <p className="muted small">{p.hint}{p.sprite && " Background is removed automatically; use green for pink or purple subjects."}</p>}
       {more && (
         <div className="prow more">
           <label>Size
             <select value={size} onChange={e => setSize(e.target.value)}>
+              <option value="">Default ({autoSize.replace("x", " × ")})</option>
               {sizes.map(s => <option key={s} value={s}>{s.replace("x", " × ")}</option>)}
             </select></label>
           <label>Images

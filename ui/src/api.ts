@@ -21,7 +21,10 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 
 export type Config = { oidc: boolean; dev_login: boolean; version: string };
 export type Me = { id: string; username: string; display_name: string | null };
-export type ModelInfo = { name: string; label: string; licence: string; commercial: boolean; note: string; default: boolean };
+export type ModelInfo = {
+  name: string; label: string; licence: string; commercial: boolean; note: string; default: boolean;
+  edits: boolean; sprite_size: number | null;
+};
 export type PresetInfo = { name: string; label: string; hint: string; template: string; width: number; height: number; sprite: boolean };
 export type Catalogue = { models: ModelInfo[]; presets: PresetInfo[]; sizes: { width: number; height: number }[]; backgrounds: string[] };
 export type Visibility = "private" | "public";
@@ -45,7 +48,7 @@ export type Variant = {
 export type ArtifactFull = Artifact & { parent: Artifact | null; children: Artifact[]; variants: Variant[]; can_edit: boolean };
 export type TweakOp = "reroll" | "edit_prompt" | "edit_image";
 export type GenerateIn = {
-  prompt: string; project_id?: string; preset: string; model: string; width: number; height: number;
+  prompt: string; project_id?: string; preset: string; model: string; width?: number; height?: number;
   seed?: number; count: number; steps?: number; background?: string;
 };
 

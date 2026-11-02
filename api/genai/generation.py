@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import sprites
-from .catalogue import BACKGROUNDS, MODELS, PRESETS, SPRITE_PRESETS, background_of
+from .catalogue import BACKGROUNDS, DEFAULT_MODEL, MODELS, PRESETS, SPRITE_PRESETS, background_of, default_size
 from .db import Database
 from .models import Artifact, Project, User, Variant, utcnow
 from .scheduler import Scheduler, SchedulerError
@@ -47,13 +47,13 @@ def pending_count(s: Session, user: User) -> int:
 
 
 def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: Project, *, prompt: str,
-           preset: str, model: str, width: int, height: int, seed: int | None, count: int, steps: int | None,
+           preset: str, model: str, width: int | None, height: int | None, seed: int | None, count: int, steps: int | None,
            max_pending: int, parent: Artifact | None = None, op: str = "generate",
            reference: Artifact | None = None, background: str = "magenta",
            full_prompt: str | None = None) -> list[Artifact]:
     """Queue `count` images of one prompt. Raises GenerateError; the caller's transaction then rolls back, so a
     refused submit leaves nothing behind. `parent`/`op` record a tweak's lineage; `reference` is an image the model
-    edits from (FLUX.2 klein reference editing)."""
+    edits from (FLUX.2 klein reference editing). No width/height: the model's and preset's default size."""
     if model not in MODELS:
         raise GenerateError(f"Unknown model {model!r}")
     if preset not in PRESETS:
@@ -66,6 +66,11 @@ def create(s: Session, scheduler: Scheduler, store: Store, user: User, project: 
                             f"{max_pending}. Wait for some to finish.", 429)
     if background not in BACKGROUNDS:
         raise GenerateError(f"Unknown background {background!r}: {', '.join(BACKGROUNDS)}")
+    if reference is not None and not MODELS[model].edits:
+        raise GenerateError(f"{MODELS[model].label} can't edit images; use a FLUX.2 klein model")
+    if width is None or height is None:
+        dw, dh = default_size(model, preset)
+        width, height = width or dw, height or dh
     if reference is not None and (reference.status != "done" or not reference.image_key):
         raise GenerateError("The image to edit from isn't finished")
     full = full_prompt or PRESETS[preset].apply(prompt, background)
@@ -194,6 +199,8 @@ def tweak(s: Session, scheduler: Scheduler, store: Store, user: User, parent: Ar
         raise GenerateError(f"Unknown tweak {op!r}: reroll, edit_prompt or edit_image")
     if op in ("edit_prompt", "edit_image") and not (prompt or "").strip():
         raise GenerateError("This tweak needs a prompt" if op == "edit_prompt" else "Say what to change in the image")
+    if not model and op == "edit_image" and not MODELS.get(parent.model, MODELS[DEFAULT_MODEL]).edits:
+        model = DEFAULT_MODEL           # a text-to-image-only model's picture is edited by the default (FLUX) model
     common = dict(model=model or parent.model, width=parent.width, height=parent.height, steps=parent.steps,
                   count=count, max_pending=max_pending, parent=parent, op=op)
     # Re-rolling or re-wording an edit redoes the edit: same reference image (the edit's own source), so the subject

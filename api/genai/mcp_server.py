@@ -32,7 +32,7 @@ from .scheduler import Scheduler
 from .storage import Store
 
 INSTRUCTIONS = """\
-genai generates images (FLUX.2 klein, on a shared GPU) and keeps them in projects, with the prompt and settings that
+genai generates images (FLUX.2 klein or Qwen-Image, on a shared GPU) and keeps them in projects, with the prompt and settings that
 made each one. You act for the signed-in user who connected you, with their permissions.
 
 - generate makes images from a prompt. Presets wrap the prompt in a game-sprite template (pixel art on a flat key-colour
@@ -41,6 +41,8 @@ made each one. You act for the signed-in user who connected you, with their perm
   magenta or purple subjects, magenta for green ones, so the clean-up doesn't eat the subject. model
   "flux2-klein-4b" is the default (fast, Apache-2.0); "flux2-klein-9b" is better at hard prompts but about twice as slow
   and under a NON-COMMERCIAL licence: its images may not be used in a commercial game. Say so if you pick it.
+  "qwen-image-2512" (Apache-2.0) draws cleaner pixel art and follows item prompts better, but is several times slower
+  (sprites default to 512², ~10 s each) and can't edit: edit_image on its pictures is done by flux2-klein-4b.
 - generate waits up to wait_seconds for the images; anything still pending comes back with its status. Check later with
   get_artifact. A 4B image takes ~3 s once the model is loaded; the first one after a model swap can take longer.
 - Images go into a project: one of the user's own (by id or name), or their private "Scratch" project when none is
@@ -206,15 +208,16 @@ def build(db: Database, settings: Settings, scheduler: Scheduler, store: Store,
     def generate(ctx: Context, prompt: Annotated[str, Field(min_length=1, max_length=4000)],
                  project: str | None = None, preset: str = catalogue.DEFAULT_PRESET,
                  model: str = catalogue.DEFAULT_MODEL,
-                 width: Annotated[int, Field(ge=256, le=2048, multiple_of=16)] = 1024,
-                 height: Annotated[int, Field(ge=256, le=2048, multiple_of=16)] = 1024,
+                 width: Annotated[int | None, Field(ge=256, le=2048, multiple_of=16)] = None,
+                 height: Annotated[int | None, Field(ge=256, le=2048, multiple_of=16)] = None,
                  seed: Annotated[int | None, Field(ge=0, lt=2 ** 31)] = None,
                  count: Annotated[int, Field(ge=1, le=generation.MAX_COUNT)] = 1,
                  steps: Annotated[int | None, Field(ge=1, le=50)] = None,
                  background: Literal["magenta", "green"] = "magenta",
                  wait_seconds: Annotated[int, Field(ge=0, le=MAX_WAIT)] = 60) -> dict:
         """Generate `count` images of `prompt` into `project` (one of yours, by id or name; default: your Scratch
-        project). preset "sprite" for game sprites (give just the subject). Waits up to wait_seconds for them; look at
+        project). preset "sprite" for game sprites (give just the subject). No width/height: 1024², or the model's
+        sprite size for sprite presets (512² for qwen-image-2512). Waits up to wait_seconds for them; look at
         a result with get_image."""
         def submit(s, user):
             p = find_project(s, user, project, write=True) if project else auth.ensure_default_project(s, user)

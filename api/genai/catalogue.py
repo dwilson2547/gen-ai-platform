@@ -12,12 +12,18 @@ class Model:
     licence: str
     commercial: bool
     note: str = ""
+    edits: bool = True             # takes a reference image (edit_image); text-to-image-only models don't
+    sprite_size: int | None = None # default square side for sprite presets, when the caller gives no size
 
 
 MODELS: dict[str, Model] = {m.name: m for m in [
     Model("flux2-klein-4b", "FLUX.2 klein 4B", "Apache-2.0", True, "Fast. ~3 s per image."),
     Model("flux2-klein-9b", "FLUX.2 klein 9B", "FLUX Non-Commercial License", False,
           "Better at hard prompts, ~2x slower. Its images may not be used commercially."),
+    # Measured on a 5080 (design §4a): ~8 s per 512² image warm, ~22 s at 1024². Sprites end at 64 px, so 512².
+    Model("qwen-image-2512", "Qwen-Image 2512", "Apache-2.0", True,
+          "Cleaner pixel art, several times slower than 4B (sprites default to 512²). Can't edit images: edits of "
+          "its pictures are made with FLUX.2 klein 4B.", edits=False, sprite_size=512),
 ]}
 DEFAULT_MODEL = "flux2-klein-4b"
 
@@ -57,13 +63,21 @@ PRESETS: dict[str, Preset] = {p.name: p for p in [
 ]}
 DEFAULT_PRESET = "none"
 
+def default_size(model: str, preset: str) -> tuple[int, int]:
+    m, p = MODELS.get(model), PRESETS[preset]
+    if m and m.sprite_size and preset in SPRITE_PRESETS:
+        return m.sprite_size, m.sprite_size
+    return p.width, p.height
+
+
 SIZES = [(1024, 1024), (768, 1024), (1024, 768), (512, 512), (1024, 1536), (1536, 1024)]
 
 
 def public() -> dict:
     return {
         "models": [{"name": m.name, "label": m.label, "licence": m.licence, "commercial": m.commercial,
-                    "note": m.note, "default": m.name == DEFAULT_MODEL} for m in MODELS.values()],
+                    "note": m.note, "default": m.name == DEFAULT_MODEL, "edits": m.edits,
+                    "sprite_size": m.sprite_size} for m in MODELS.values()],
         "presets": [{"name": p.name, "label": p.label, "hint": p.hint, "template": p.template,
                      "width": p.width, "height": p.height, "sprite": p.name in SPRITE_PRESETS}
                     for p in PRESETS.values()],

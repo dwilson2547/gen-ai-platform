@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, type Artifact, type TweakOp } from "./api.ts";
+import { useApp } from "./state.tsx";
 
 // Make new images from this one (workflow 8): re-roll, change the prompt, or edit the picture itself.
 export function TweakPanel({ a, onQueued }: { a: Artifact; onQueued: (kids: Artifact[]) => void }) {
@@ -8,6 +9,9 @@ export function TweakPanel({ a, onQueued }: { a: Artifact; onQueued: (kids: Arti
   const [count, setCount] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { catalogue } = useApp();
+  const model = catalogue.models.find(m => m.name === a.model);
+  const editor = model && !model.edits ? catalogue.models.find(m => m.default) : null;   // who edits its pictures
 
   const open = (m: TweakOp) => {
     setMode(m); setError(null);
@@ -47,6 +51,7 @@ export function TweakPanel({ a, onQueued }: { a: Artifact; onQueued: (kids: Arti
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(mode); } }} />
           <p className="muted small">{mode === "edit_image"
             ? "Describe the change. The image itself goes to the model, so the subject stays the same."
+              + (editor ? ` ${model!.label} can't edit, so ${editor.label} makes this one.` : "")
             : `Seed ${a.seed ?? "?"} and the other settings stay, so only the prompt changes.`}</p>
           <div className="actions">
             <button type="button" className="ghost" onClick={() => setMode(null)}>Cancel</button>

@@ -79,8 +79,8 @@ class GenerateIn(BaseModel):
     project_id: str | None = None
     preset: str = catalogue.DEFAULT_PRESET
     model: str = catalogue.DEFAULT_MODEL
-    width: int = Field(default=1024, ge=256, le=2048, multiple_of=16)
-    height: int = Field(default=1024, ge=256, le=2048, multiple_of=16)
+    width: int | None = Field(default=None, ge=256, le=2048, multiple_of=16)    # None: the model's/preset's default
+    height: int | None = Field(default=None, ge=256, le=2048, multiple_of=16)
     seed: int | None = Field(default=None, ge=0, lt=2 ** 31)
     count: int = Field(default=1, ge=1, le=generation.MAX_COUNT)
     steps: int | None = Field(default=None, ge=1, le=50)

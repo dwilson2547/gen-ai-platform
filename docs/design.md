@@ -79,7 +79,12 @@ Objects live in an AIStor bucket (`gen-ai-platform`), metadata in Postgres.
 - Quality, same 6 prompts and seed (prototype): 9B honoured "no shadow" (4B drew one), gave the slime a
   face and shading, added the fox's tail; cleaner edges overall.
 
-### 4a. Qwen-Image 2512 (tested on the 5080 2026-11-01) 🧪
+### 4a. Qwen-Image 2512 (tested on the 5080 2026-11-01; added in 0.5.0) ✅
+
+0.5.0: third model `qwen-image-2512` (gpu-scheduler entry of the same name). Text-to-image only: an `edit_image` of
+its picture is made by the default FLUX model unless a model is named (naming Qwen is refused). With no size given,
+sprite presets on it are 512² (`Model.sprite_size`); width/height are optional in the API and MCP for that reason.
+
 
 - "Qwen Image Max" (`qwen-image-max-2025-12-30`) is an **API-only** Alibaba Model Studio product: no weights. The open
   weights are **`Qwen/Qwen-Image-2512`** (~20B), model card `license: apache-2.0`. Quality relative to Max: unknown.
