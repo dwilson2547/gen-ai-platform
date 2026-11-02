@@ -85,6 +85,36 @@ export const api = {
 
 export const pending = (a: Artifact) => a.status === "queued" || a.status === "running";
 
+// Character sheets (design §11)
+export type Candidate = { id: string; position: number; frozen: boolean; kept: boolean; held: boolean; artifact: Artifact | null };
+export type SheetSlot = { id: string; kind: "base" | "variation"; label: string; instruction: string; position: number; candidates: Candidate[] };
+export type SheetBrief = {
+  id: string; name: string; description: string; model: string; model_label: string; edit_model: string;
+  background: string; by: string; created_at: string; project: { id: string; name: string; visibility: Visibility };
+  base_artifact_id: string | null; cover_url: string | null; pixel_size: number; pixel_colors: number; kept: number;
+  can_edit: boolean;
+};
+export type Sheet = SheetBrief & { slots: SheetSlot[] };
+export type SheetExport = { download_url: string; expires_at: string; files: number; shrunk: string[] };
+export const busyCandidate = (c: Candidate) => c.held || (c.artifact !== null && pending(c.artifact));
+export const sheetsApi = {
+  list: (project_id?: string) => call<{ sheets: SheetBrief[] }>("GET", "/api/sheets" + qs({ project_id })),
+  get: (id: string) => call<Sheet>("GET", `/api/sheets/${id}`),
+  create: (b: { name: string; description?: string; base_artifact_id?: string; project_id?: string; model: string; background: string }) =>
+    call<Sheet>("POST", "/api/sheets", b),
+  update: (id: string, b: Partial<{ name: string; pixel_size: number; pixel_colors: number }>) =>
+    call<Sheet>("PATCH", `/api/sheets/${id}`, b),
+  remove: (id: string) => call<{ ok: boolean }>("DELETE", `/api/sheets/${id}`),
+  setBase: (id: string, candidate_id: string) => call<Sheet>("POST", `/api/sheets/${id}/base`, { candidate_id }),
+  addRows: (id: string, lines: string[]) => call<Sheet>("POST", `/api/sheets/${id}/slots`, { lines }),
+  reroll: (id: string, slot: string, instruction?: string) =>
+    call<Sheet>("POST", `/api/sheets/${id}/slots/${slot}/reroll`, { instruction }),
+  removeRow: (id: string, slot: string) => call<Sheet>("DELETE", `/api/sheets/${id}/slots/${slot}`),
+  mark: (id: string, cand: string, b: { frozen?: boolean; kept?: boolean }) =>
+    call<Sheet>("PATCH", `/api/sheets/${id}/candidates/${cand}`, b),
+  export: (id: string) => call<SheetExport>("POST", `/api/sheets/${id}/export`),
+};
+
 export type TokenRow = { id: string; name: string; prefix: string; created_at: string; last_used_at: string | null };
 export type GrantRow = { id: string; client_name: string; created_at: string; last_used_at: string | null };
 export const agentsApi = {

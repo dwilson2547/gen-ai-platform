@@ -3,6 +3,7 @@ import { api, type Project } from "./api.ts";
 import { Grid, useArtifacts } from "./Grid.tsx";
 import { ProjectDialog } from "./ProjectDialog.tsx";
 import { PromptBar } from "./PromptBar.tsx";
+import { SheetList } from "./Sheets.tsx";
 import { Link } from "./router.tsx";
 import { useApp } from "./state.tsx";
 
@@ -27,6 +28,7 @@ export function ProjectPage({ id }: { id: string }) {
         </div>
         {p.mine && <button onClick={() => setEditing(true)}>Edit</button>}
       </div>
+      <SheetList projectId={p.id} canCreate={p.mine} />
       {p.mine && <PromptBar project={p} onQueued={a => { list.prepend(a); setP({ ...p, artifacts: p.artifacts + a.length }); }} />}
       <Grid {...list} empty={p.mine ? "No images in this project yet. Generate some above." : "This project has no images yet."} />
       {editing && <ProjectDialog project={p} onClose={() => setEditing(false)}

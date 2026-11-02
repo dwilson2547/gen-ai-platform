@@ -204,7 +204,7 @@ AIStor bucket, Helm chart at `helm/gen-ai-platform/` deployed by Argo, served be
      parts in the cutout (a pink X on a map, on magenta): that's what the green option is for.
 5. More presets.
 
-## 11. Character sheets (proposal 2026-11-02; user's choices in) 📐
+## 11. Character sheets ✅ (0.6.0, 2026-11-02; `api/genai/sheets.py`, `ui/src/SheetPage.tsx`)
 
 **Why.** The workflow the user wants: roll until a character is right, then get that character in poses, with
 expressions, with different weapon sets. It works today as one "Edit image" per variation (tested 2026-11-02 on a
@@ -246,7 +246,8 @@ versions work as now. Unkept candidates stay in the project like any other image
    variations is 40 images, ~2–3 min on the 3080 with 4B), not by refusing.
 
 **Scale.** Per-sprite "fit" makes a crouch as tall as a jump. The export scales every kept image by the **base's**
-factor (base subject height → tile), standing on the bottom row; one taller than the tile is shrunk to fit and flagged.
+factor, the base's longest side filling ¾ of the tile (at a full tile, the first real test's hammer-and-shield variant
+didn't fit), standing on the bottom row; one still too big is shrunk to fit and flagged.
 
 **MCP.** `create_sheet(name, description | base_artifact, model)`, `get_sheet`, `freeze`, `reroll_unfrozen(slot)`,
 `set_base`, `add_variations`, `keep`, `export_sheet` (download URL of the zip).

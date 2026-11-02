@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, pending, type Artifact, type ArtifactFull } from "./api.ts";
 import { Grid } from "./Grid.tsx";
+import { NewSheetDialog } from "./Sheets.tsx";
 import { TweakPanel } from "./Tweak.tsx";
 import { Versions } from "./Versions.tsx";
 import { Confirm } from "./Modal.tsx";
@@ -18,6 +19,7 @@ export function ArtifactPage({ id }: { id: string }) {
   const [delError, setDelError] = useState<string | null>(null);
   const [keepSeed, setKeepSeed] = useState(false);
   const [zoom, setZoom] = useState(false);
+  const [sheeting, setSheeting] = useState(false);
   const { prev, next } = neighbours(id);
 
   useEffect(() => { api.artifact(id).then(x => { setA(x); setKids(x.children); }).catch(() => setMissing(true)); }, [id]);
@@ -84,9 +86,12 @@ export function ArtifactPage({ id }: { id: string }) {
               <button onClick={() => navigate(`/?from=${a.id}${keepSeed ? "&seed=1" : ""}`)}>Use these settings</button>
               <label className="small"><input type="checkbox" checked={keepSeed} onChange={e => setKeepSeed(e.target.checked)} /> same seed</label>
             </div>
+            {a.status === "done" && <button onClick={() => setSheeting(true)}
+              title="Poses, expressions and weapon sets of this character, kept consistent">Make character sheet</button>}
             {mineProject && <button className="danger ghost" onClick={() => setConfirm(true)}>Delete</button>}
           </div>
           <TweakPanel a={a} onQueued={k => setKids(cur => [...k, ...cur])} />
+          {sheeting && <NewSheetDialog base={a} onClose={() => setSheeting(false)} />}
           {a.commercial === false && <p className="warn small">{a.model_label} is under a non-commercial licence: this image may not be used commercially.</p>}
           <dl>
             <dt>Project</dt><dd><Link to={`/p/${a.project.id}`}>{a.project.name}</Link> <span className={`vis ${a.project.visibility}`}>{a.project.visibility}</span></dd>

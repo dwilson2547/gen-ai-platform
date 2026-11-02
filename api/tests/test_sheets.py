@@ -135,13 +135,15 @@ def test_base_rules(world, alice):
 
 def test_from_an_existing_image(world, alice):
     app, _, sched, _ = world
-    a = alice.post("/api/generate", json={"prompt": "a bat", "preset": "sprite", "background": "green"},
+    a = alice.post("/api/generate", json={"prompt": "a bat", "preset": "sprite", "background": "green",
+                                          "model": "qwen-image-2512"},
                    headers=H).json()["artifacts"][0]
     finish_all(world)
     n = len(sched.submitted)
     sh = new(alice, description=None, base_artifact_id=a["id"])
     assert sh["base_artifact_id"] == a["id"] and len(sched.submitted) == n and sh["background"] == "green"
     assert base_slot(sh)["candidates"][0]["kept"] and sh["slots"][0]["instruction"] == "a bat"
+    assert sh["model"] == "qwen-image-2512" and sh["edit_model"] == "flux2-klein-4b"
     assert alice.post("/api/sheets", json={"name": "x"}, headers=H).status_code == 422     # no description, no image
 
 
@@ -177,7 +179,7 @@ def test_keep_and_export_at_the_base_scale(world, alice):
         assert box[3] == 64                                                      # standing on the bottom row
         return box[3] - box[1]
     base_h, crouch_h, jump_h = subject_h("base_1_64px.png"), subject_h("crouching_1_64px.png"), subject_h("jumping_1_64px.png")
-    assert base_h == 64 and 30 <= crouch_h <= 36 and jump_h == 64                # half the base; jump fitted
+    assert base_h == 48 and 22 <= crouch_h <= 27 and jump_h == 64                # base 3/4 of the tile; half; fitted
 
 
 def test_who_sees_and_changes_a_sheet(world, alice):

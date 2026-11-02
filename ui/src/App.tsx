@@ -5,6 +5,8 @@ import { ArtifactPage } from "./ArtifactPage.tsx";
 import { Home } from "./Home.tsx";
 import { ProjectPage } from "./ProjectPage.tsx";
 import { Projects } from "./Projects.tsx";
+import { SheetPage } from "./SheetPage.tsx";
+import { SheetList } from "./Sheets.tsx";
 import { Link, navigate, useLocation } from "./router.tsx";
 import { Splash } from "./Splash.tsx";
 import { AppState } from "./state.tsx";
@@ -43,6 +45,8 @@ function Shell({ me }: { me: Me }) {
   if (path === "/" || path === "") page = <Home />;
   else if (path === "/projects") page = <Projects />;
   else if (path === "/agents") page = <Agents />;
+  else if (path === "/characters") page = <div className="page"><SheetList canCreate /></div>;
+  else if ((m = path.match(/^\/s\/([0-9a-f]{32})$/))) page = <SheetPage key={m[1]} id={m[1]} />;
   else if ((m = path.match(/^\/p\/([0-9a-f]{32})$/))) page = <ProjectPage key={m[1]} id={m[1]} />;
   else if ((m = path.match(/^\/a\/([0-9a-f]{32})$/))) page = <ArtifactPage key={m[1]} id={m[1]} />;
   else page = <div className="panel"><h2>Not found</h2><Link to="/">Back home</Link></div>;
@@ -52,6 +56,7 @@ function Shell({ me }: { me: Me }) {
         <Link to="/" className="brand"><img src="/favicon.svg" alt="" /> genai</Link>
         <nav>
           <Link to="/" className={path === "/" ? "on" : ""}>Generate</Link>
+          <Link to="/characters" className={path === "/characters" || path.startsWith("/s/") ? "on" : ""}>Characters</Link>
           <Link to="/projects" className={path.startsWith("/p") ? "on" : ""}>Projects</Link>
           <Link to="/agents" className={path === "/agents" ? "on" : ""}>Agents</Link>
         </nav>

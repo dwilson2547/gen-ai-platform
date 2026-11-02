@@ -35,6 +35,9 @@ LINK_TTL = timedelta(minutes=10)
 LINK_PREFIX = "gns_"
 # Put in front of every variation's instruction: the 2026-11-02 test showed edits redrawing the subject bigger.
 FRAMING = "same character, same pixel art style, same size and framing, {bg}: {line}"
+# The base fills this much of the export tile, so wider (weapon sets) or taller (jumps) variations still fit at its
+# scale: at 1.0 a 2026-11-02 dwarf with a hammer and shield had to be shrunk, losing the shared scale.
+BASE_FILL = 0.75
 
 
 def edit_model(sheet: Sheet) -> str:
@@ -136,6 +139,8 @@ def new_sheet(s: Session, scheduler: Scheduler, store: Store, user: User, projec
         raise GenerateError("Describe the character, or start from an image")
     if base is not None and (base.status != "done" or not base.image_key):
         raise GenerateError("That image isn't finished")
+    if base is not None and base.model in MODELS:
+        model = base.model                                       # the base's own model, so the sheet says who drew it
     sheet = Sheet(project_id=project.id, created_by=user.id, name=name.strip()[:100], model=model,
                   background=background_of(base.full_prompt) or background if base else background,
                   description=(description or (base.prompt if base else "")).strip())
@@ -221,14 +226,14 @@ def _slug(text: str) -> str:
 
 def export(s: Session, sheet: Sheet, store: Store) -> tuple[str, int, list[str]]:
     """Zip the kept images (cutout + pixel sprite each) into the store. Pixel sprites share the sheet's size and
-    colours and the base's scale, standing on the bottom row of a square tile. Returns (key, files, shrunk names)."""
+    colours and the base's scale (the base filling BASE_FILL of the tile), standing on the bottom row of a square tile. Returns (key, files, shrunk names)."""
     base = sheet.base
     if base is None or base.status != "done":
         raise GenerateError("Pick the base first", 409)
     params = sprites.PixelParams(sheet.pixel_size, sheet.pixel_colors, "square")
     if err := params.check():
         raise GenerateError(err)
-    scale = sprites.subject_scale(b"".join(store.get(make_cutout(base, store).image_key)), sheet.pixel_size)
+    scale = sprites.subject_scale(b"".join(store.get(make_cutout(base, store).image_key)), sheet.pixel_size) * BASE_FILL
     buf, files, shrunk, used = io.BytesIO(), 0, [], set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for slot in slots(s, sheet):

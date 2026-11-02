@@ -192,3 +192,30 @@ table.rows td:last-child { text-align: right; }
 .row-form label { display: inline-flex; align-items: center; gap: .3em; }
 .swatch { display: inline-block; width: .8em; height: .8em; border-radius: 3px; margin-right: .35em; vertical-align: -1px; }
 .bg-magenta .swatch { background: #ff00ff; } .bg-green .swatch { background: #00ff00; }
+
+/* character sheets (SheetPage.tsx) */
+.sheet .stage { display: flex; flex-direction: column; gap: .7em; }
+.sheet h3 { margin: .4em 0 0; }
+.srow { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: .8em; display: flex; flex-direction: column; gap: .6em; }
+.srow-head { display: flex; justify-content: space-between; align-items: center; gap: .8em; flex-wrap: wrap; }
+.srow-actions { display: flex; gap: .4em; }
+.cgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6em; }
+.cand { margin: 0; border: 2px solid transparent; border-radius: var(--r); overflow: hidden; background: var(--panel2); }
+.cand.frozen { border-color: #7cc4ff; }
+.cand.kept { box-shadow: 0 0 0 2px var(--accent) inset; }
+.cimg { position: relative; width: 100%; border: 0; border-radius: 0; cursor: pointer; }
+.cimg:disabled { cursor: default; }
+.cimg .pin { position: absolute; top: 6px; left: 6px; font-size: .7rem; font-weight: 700; background: #0d2a40; color: #9fd4ff; padding: .1em .45em; border-radius: 5px; }
+.cimg .pin.base { left: auto; right: 6px; background: var(--accent); color: #fff; }
+.cand figcaption { display: flex; align-items: center; justify-content: space-between; gap: .4em; padding: .4em .5em; min-height: 2.2em; }
+.keep { display: inline-flex; align-items: center; gap: .3em; font-size: .85rem; }
+.small-btn { padding: .25em .6em; font-size: .8rem; }
+.spinner.inline { display: inline-block; width: 12px; height: 12px; border-width: 2px; margin-left: .4em; vertical-align: -2px; }
+.addrows { display: flex; flex-direction: column; gap: .5em; }
+.starters { display: flex; flex-direction: column; gap: .3em; }
+.chip { padding: .2em .6em; font-size: .8rem; border-radius: 99px; }
+.pcard .sheetcover { position: relative; }
+.pcard .sheetcover img { position: absolute; inset: 0; object-fit: contain; image-rendering: pixelated; }
+@media (max-width: 800px) { .cgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.starters .chip { flex: 0 0 auto; }
+.cimg:disabled { opacity: 1; }
